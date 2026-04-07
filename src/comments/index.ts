@@ -1,0 +1,20 @@
+export {
+  createCommentAnchorFromContainer,
+  createCommentQuoteFromContainer,
+  resolveCommentThread,
+} from "./anchors";
+
+export { parseCommentThread } from "./serialization";
+
+export {
+  countResolvedCommentThreads,
+  createCommentThread,
+  deleteCommentFromThread,
+  editCommentInThread,
+  getCommentThreadUpdatedAt,
+  isResolvedCommentThread,
+  markCommentThreadAsResolved,
+  replyToCommentThread,
+} from "./threads";
+
+export type { Comment, CommentResolution, CommentThread } from "./types";
