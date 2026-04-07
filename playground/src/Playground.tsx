@@ -1,0 +1,87 @@
+import { useState } from "react";
+import { Documint, type Presence } from "documint";
+import { fixtureOptions, getThemeOption, themeOptions } from "./data";
+import { PresencePopover } from "./popovers/PresencePopover";
+import { ThemePopover } from "./popovers/ThemePopover";
+
+export function Playground() {
+  const [fixtureId, setFixtureId] = useState<string>(fixtureOptions[0].id);
+  const [content, setContent] = useState<string>(fixtureOptions[0].markdown);
+  const [themeId, setThemeId] = useState<string>(themeOptions[0].id);
+  const [presence, setPresence] = useState<Presence[]>([]);
+
+  const activeThemeOption = getThemeOption(themeId);
+  const activeTheme = activeThemeOption.theme;
+
+  const handleFixtureChange = (nextFixtureId: string) => {
+    const nextFixture = fixtureOptions.find((candidate) => candidate.id === nextFixtureId);
+
+    if (!nextFixture) {
+      return;
+    }
+
+    setFixtureId(nextFixture.id);
+    setContent(nextFixture.markdown);
+  };
+
+  const handleThemeChange = (nextThemeId: string) => {
+    setThemeId(nextThemeId);
+  };
+
+  const handleContentChange = (nextContent: string) => {
+    setContent(nextContent);
+  };
+
+  return (
+    <main className="playground-shell">
+      <header className="playground-header">
+        <h1>Documint Playground</h1>
+
+        <div className="playground-controls">
+          <label className="fixture-picker">
+            <select
+              aria-label="Select markdown fixture"
+              onChange={(event) => handleFixtureChange(event.target.value)}
+              value={fixtureId}
+            >
+              {fixtureOptions.map((fixture) => (
+                <option key={fixture.id} value={fixture.id}>
+                  {fixture.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <ThemePopover onThemeIdChange={handleThemeChange} themeId={themeId} />
+
+          <PresencePopover content={content} onPresenceChange={setPresence} resetKey={fixtureId} />
+        </div>
+      </header>
+
+      <section className="playground-grid">
+        <div className="host-panel">
+          <div className="host-card">
+            <Documint
+              content={content}
+              onContentChange={handleContentChange}
+              presence={presence}
+              theme={activeTheme ?? undefined}
+            />
+          </div>
+        </div>
+
+        <div className="source-panel">
+          <div className="source-card">
+            <textarea
+              aria-label="Markdown source"
+              className="source-editor"
+              onChange={(event) => handleContentChange(event.target.value)}
+              spellCheck={false}
+              value={content}
+            />
+          </div>
+        </div>
+      </section>
+    </main>
+  );
+}
