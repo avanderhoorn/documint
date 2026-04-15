@@ -439,9 +439,12 @@ function createEditorWithCache(renderCache: CanvasRenderCache): Editor {
       );
     },
     insertLineBreak(state) {
+      const nextState = dispatchKey(state, "insertLineBreak");
+      const animatedState = nextState ? maybeAnimateNewListItem(state, nextState) : nextState;
+
       return createNullableTransitionEditorStateChange(
         state,
-        dispatchKey(state, "insertLineBreak"),
+        animatedState,
         true,
       );
     },
@@ -793,10 +796,6 @@ function createTransitionEditorStateChange(
 ) {
   let animatedState = maybeAnimateActiveBlockChange(previousState, nextState);
 
-  if (documentChanged) {
-    animatedState = maybeAnimateNewListItem(previousState, animatedState);
-  }
-
   return createEditorStateChange(
     animatedState,
     documentChanged,
@@ -856,7 +855,11 @@ function maybeAnimateNewListItem(
       .filter((path): path is string => path !== undefined),
   );
 
-  for (const [id] of nextState.documentEditor.listItemMarkers) {
+  for (const [id, marker] of nextState.documentEditor.listItemMarkers) {
+    if (marker.kind === "task") {
+      continue;
+    }
+
     const block = nextState.documentEditor.blockIndex.get(id);
 
     if (block && !previousPaths.has(block.path)) {
