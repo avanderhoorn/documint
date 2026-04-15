@@ -33,6 +33,7 @@ export type EditorAnimation =
   | ActiveBlockFlashAnimation
   | DeletedTextFadeAnimation
   | InsertedTextHighlightAnimation
+  | ListMarkerPopAnimation
   | PunctuationPulseAnimation;
 
 export type ActiveBlockFlashAnimation = {
@@ -54,6 +55,12 @@ export type InsertedTextHighlightAnimation = {
   kind: "inserted-text-highlight";
   regionPath: string;
   startOffset: number;
+  startedAt: number;
+};
+
+export type ListMarkerPopAnimation = {
+  blockPath: string;
+  kind: "list-marker-pop";
   startedAt: number;
 };
 
@@ -190,6 +197,18 @@ export function addPunctuationPulseAnimation(
     kind: "punctuation-pulse",
     offset,
     regionPath: region.path,
+    startedAt,
+  });
+}
+
+export function addListMarkerPopAnimation(
+  state: EditorState,
+  blockPath: string,
+  startedAt = getEditorAnimationTime(),
+): EditorState {
+  return addEditorAnimation(state, {
+    blockPath,
+    kind: "list-marker-pop",
     startedAt,
   });
 }

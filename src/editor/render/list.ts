@@ -4,6 +4,7 @@
 
 import { resolveTaskCheckboxBounds, type ViewportLayout } from "../layout";
 import type { DocumentListItemMarker } from "../model/document-editor";
+import { resolveListMarkerPopColor, resolveListMarkerPopScale, type ActiveListMarkerPop } from "./animations";
 import type { EditorTheme } from "./theme";
 
 const listMarkerTextInset = 2;
@@ -27,24 +28,39 @@ export function paintListMarker(
   textLeft: number,
   textBaseline: number,
   theme: EditorTheme,
+  pop: ActiveListMarkerPop | null = null,
 ) {
   if (!marker || line.start !== 0) {
     return;
   }
 
+  if (pop) {
+    const scale = resolveListMarkerPopScale(pop);
+    const center = resolveListMarkerCenter(marker, line, textLeft, textBaseline, context);
+
+    context.save();
+    context.translate(center.x, center.y);
+    context.scale(scale, scale);
+    context.translate(-center.x, -center.y);
+  }
+
   if (marker.kind === "task") {
-    paintTaskCheckbox(context, line, marker.checked, theme);
-    return;
+    paintTaskCheckbox(context, line, marker.checked, theme, pop);
+  } else {
+    context.fillStyle = pop
+      ? resolveListMarkerPopColor(theme.listMarkerText, pop, theme)
+      : theme.listMarkerText;
+
+    if (marker.kind === "ordered") {
+      paintOrderedListMarker(context, marker.label, textLeft, textBaseline);
+    } else {
+      context.fillText(marker.label, line.left - listMarkerTextInset, textBaseline);
+    }
   }
 
-  context.fillStyle = theme.listMarkerText;
-
-  if (marker.kind === "ordered") {
-    paintOrderedListMarker(context, marker.label, textLeft, textBaseline);
-    return;
+  if (pop) {
+    context.restore();
   }
-
-  context.fillText(marker.label, line.left - listMarkerTextInset, textBaseline);
 }
 
 export function paintTaskCheckbox(
@@ -52,16 +68,17 @@ export function paintTaskCheckbox(
   line: ViewportLayout["lines"][number],
   checked: boolean,
   theme: EditorTheme,
+  pop: ActiveListMarkerPop | null = null,
 ) {
   const checkboxBounds = resolveTaskCheckboxBounds(line);
 
-  paintTaskCheckboxFrame(context, checkboxBounds, checked, theme);
+  paintTaskCheckboxFrame(context, checkboxBounds, checked, theme, pop);
 
   if (!checked) {
     return;
   }
 
-  paintTaskCheckboxCheckmark(context, checkboxBounds, theme);
+  paintTaskCheckboxCheckmark(context, checkboxBounds, theme, pop);
 }
 
 function paintTaskCheckboxFrame(
@@ -69,9 +86,13 @@ function paintTaskCheckboxFrame(
   checkboxBounds: TaskCheckboxBounds,
   checked: boolean,
   theme: EditorTheme,
+  pop: ActiveListMarkerPop | null = null,
 ) {
-  context.fillStyle = checked ? theme.checkboxCheckedFill : theme.checkboxUncheckedFill;
-  context.strokeStyle = checked ? theme.checkboxCheckedStroke : theme.checkboxUncheckedStroke;
+  const fillColor = checked ? theme.checkboxCheckedFill : theme.checkboxUncheckedFill;
+  const strokeColor = checked ? theme.checkboxCheckedStroke : theme.checkboxUncheckedStroke;
+
+  context.fillStyle = pop ? resolveListMarkerPopColor(fillColor, pop, theme) : fillColor;
+  context.strokeStyle = pop ? resolveListMarkerPopColor(strokeColor, pop, theme) : strokeColor;
   context.beginPath();
   context.lineWidth = taskCheckboxStrokeWidth;
   context.roundRect(
@@ -89,8 +110,11 @@ function paintTaskCheckboxCheckmark(
   context: CanvasRenderingContext2D,
   checkboxBounds: TaskCheckboxBounds,
   theme: EditorTheme,
+  pop: ActiveListMarkerPop | null = null,
 ) {
-  context.strokeStyle = theme.checkboxCheckmark;
+  context.strokeStyle = pop
+    ? resolveListMarkerPopColor(theme.checkboxCheckmark, pop, theme)
+    : theme.checkboxCheckmark;
   context.lineWidth = taskCheckmarkStrokeWidth;
   context.beginPath();
   context.moveTo(
@@ -118,4 +142,26 @@ function paintOrderedListMarker(
   context.textAlign = "right";
   context.fillText(label, textLeft - orderedListMarkerGap, textBaseline);
   context.textAlign = previousTextAlign;
+}
+
+function resolveListMarkerCenter(
+  marker: DocumentListItemMarker,
+  line: ViewportLayout["lines"][number],
+  textLeft: number,
+  textBaseline: number,
+  context: CanvasRenderingContext2D,
+) {
+  if (marker.kind === "task") {
+    const bounds = resolveTaskCheckboxBounds(line);
+    return { x: bounds.left + bounds.size / 2, y: bounds.top + bounds.size / 2 };
+  }
+
+  const metrics = context.measureText(marker.label);
+  const y = textBaseline - (metrics.actualBoundingBoxAscent - metrics.actualBoundingBoxDescent) / 2;
+
+  if (marker.kind === "ordered") {
+    return { x: textLeft - orderedListMarkerGap - metrics.width / 2, y };
+  }
+
+  return { x: line.left - listMarkerTextInset + metrics.width / 2, y };
 }

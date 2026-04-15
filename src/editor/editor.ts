@@ -23,6 +23,7 @@ import {
 import {
   addActiveBlockFlashAnimation,
   addDeletedTextFadeAnimation,
+  addListMarkerPopAnimation,
   addPunctuationPulseAnimation,
   createDocumentFromEditorState,
   createEditorState,
@@ -790,7 +791,11 @@ function createTransitionEditorStateChange(
   nextState: EditorState,
   documentChanged: boolean,
 ) {
-  const animatedState = maybeAnimateActiveBlockChange(previousState, nextState);
+  let animatedState = maybeAnimateActiveBlockChange(previousState, nextState);
+
+  if (documentChanged) {
+    animatedState = maybeAnimateNewListItem(previousState, animatedState);
+  }
 
   return createEditorStateChange(
     animatedState,
@@ -839,6 +844,27 @@ function maybeAnimateActiveBlockChange(
   return nextTarget && nextTarget.compareKey !== previousTarget?.compareKey
     ? addActiveBlockFlashAnimation(nextState, nextTarget.animationBlockPath)
     : nextState;
+}
+
+function maybeAnimateNewListItem(
+  previousState: EditorState,
+  nextState: EditorState,
+) {
+  const previousPaths = new Set(
+    [...previousState.documentEditor.listItemMarkers.keys()]
+      .map((id) => previousState.documentEditor.blockIndex.get(id)?.path)
+      .filter((path): path is string => path !== undefined),
+  );
+
+  for (const [id] of nextState.documentEditor.listItemMarkers) {
+    const block = nextState.documentEditor.blockIndex.get(id);
+
+    if (block && !previousPaths.has(block.path)) {
+      nextState = addListMarkerPopAnimation(nextState, block.path);
+    }
+  }
+
+  return nextState;
 }
 
 function resolveFocusedFlashTarget(state: EditorState) {

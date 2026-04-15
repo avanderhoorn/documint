@@ -9,6 +9,7 @@ import type {
   EditorState,
   EditorAnimation,
   InsertedTextHighlightAnimation,
+  ListMarkerPopAnimation,
   PunctuationPulseAnimation,
 } from "../model/state";
 
@@ -16,11 +17,15 @@ export type ActiveBlockFlash = ActiveBlockFlashAnimation & {
   progress: number;
 };
 
+export type ActiveDeletedTextFade = DeletedTextFadeAnimation & {
+  progress: number;
+};
+
 export type ActiveInsertedTextHighlight = InsertedTextHighlightAnimation & {
   progress: number;
 };
 
-export type ActiveDeletedTextFade = DeletedTextFadeAnimation & {
+export type ActiveListMarkerPop = ListMarkerPopAnimation & {
   progress: number;
 };
 
@@ -28,9 +33,10 @@ export type ActivePunctuationPulse = PunctuationPulseAnimation & {
   progress: number;
 };
 
-const insertedTextHighlightDurationMs = 1000;
-const deletedTextFadeDurationMs = 180;
 const activeBlockFlashDurationMs = 300;
+const deletedTextFadeDurationMs = 180;
+const insertedTextHighlightDurationMs = 1000;
+const listMarkerPopDurationMs = 500;
 const punctuationPulseDurationMs = 140;
 
 const transparentColor = "rgba(0, 0, 0, 0)";
@@ -40,12 +46,14 @@ const colorCache = new Map<string, [number, number, number, number]>([
 
 export function getEditorAnimationDuration(animation: EditorAnimation) {
   switch (animation.kind) {
-    case "inserted-text-highlight":
-      return insertedTextHighlightDurationMs;
-    case "deleted-text-fade":
-      return deletedTextFadeDurationMs;
     case "active-block-flash":
       return activeBlockFlashDurationMs;
+    case "deleted-text-fade":
+      return deletedTextFadeDurationMs;
+    case "inserted-text-highlight":
+      return insertedTextHighlightDurationMs;
+    case "list-marker-pop":
+      return listMarkerPopDurationMs;
     case "punctuation-pulse":
       return punctuationPulseDurationMs;
   }
@@ -179,6 +187,30 @@ export function resolveActivePunctuationPulses(state: EditorState, now: number) 
   return pulses;
 }
 
+export function resolveActiveListMarkerPops(state: EditorState, now: number) {
+  const pops = new Map<string, ActiveListMarkerPop>();
+
+  for (const animation of state.animations) {
+    if (animation.kind !== "list-marker-pop") {
+      continue;
+    }
+
+    const durationMs = getEditorAnimationDuration(animation);
+    const elapsed = now - animation.startedAt;
+
+    if (elapsed >= durationMs) {
+      continue;
+    }
+
+    pops.set(animation.blockPath, {
+      ...animation,
+      progress: Math.max(0, Math.min(1, elapsed / durationMs)),
+    });
+  }
+
+  return pops;
+}
+
 export function resolveInsertHighlightSegmentBoundaries(
   startOffset: number,
   endOffset: number,
@@ -248,6 +280,24 @@ export function resolvePunctuationPulseColor(
     transparentColor,
     punctuationPulse.progress,
   );
+}
+
+export function resolveListMarkerPopScale(pop: ActiveListMarkerPop) {
+  const scaleProgress = Math.min(1, pop.progress * 2);
+  return 0.1 + 0.9 * easeOutCubic(scaleProgress);
+}
+
+export function resolveListMarkerPopColor(
+  baseColor: string,
+  pop: ActiveListMarkerPop,
+  theme: EditorTheme,
+) {
+  const colorProgress = Math.max(0, pop.progress * 2 - 1);
+  return blendCanvasColors(theme.insertHighlightText, baseColor, colorProgress);
+}
+
+function easeOutCubic(t: number) {
+  return 1 - (1 - t) * (1 - t) * (1 - t);
 }
 
 function blendCanvasColors(fromColor: string, toColor: string, progress: number) {

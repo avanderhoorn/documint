@@ -28,6 +28,7 @@ import {
   resolveActiveInsertedTextHighlights,
   resolveActiveBlockFlashColor,
   resolveActiveBlockFlashes,
+  resolveActiveListMarkerPops,
   resolveActivePunctuationPulses,
   resolveActiveInsertedTextHighlightForSegment,
   resolveAnimatedTextColor,
@@ -36,6 +37,7 @@ import {
   type ActiveDeletedTextFade,
   type ActiveInsertedTextHighlight,
   type ActiveBlockFlash,
+  type ActiveListMarkerPop,
   type ActivePunctuationPulse,
 } from "./animations";
 import { paintInlineImage } from "./image";
@@ -137,6 +139,7 @@ export function paintCanvasEditorSurface({
   const activeBlockFlashes = resolveActiveBlockFlashes(editorState, now);
   const activeDeletedTextFades = resolveActiveDeletedTextFades(editorState, now);
   const activeInsertedTextHighlights = resolveActiveInsertedTextHighlights(editorState, now);
+  const activeListMarkerPops = resolveActiveListMarkerPops(editorState, now);
   const activePunctuationPulses = resolveActivePunctuationPulses(editorState, now);
   const visibleBlockquoteRegions = resolveVisibleBlockquoteRegions(
     layout,
@@ -189,6 +192,7 @@ export function paintCanvasEditorSurface({
       activeDeletedTextFades,
       activeThreadIndex,
       activeInsertedTextHighlights,
+      activeListMarkerPops,
       activePunctuationPulses,
       context,
       editorState,
@@ -424,6 +428,7 @@ function paintDocumentLineForeground({
   activeDeletedTextFades,
   activeThreadIndex,
   activeInsertedTextHighlights,
+  activeListMarkerPops,
   activePunctuationPulses,
   context,
   editorState,
@@ -441,6 +446,7 @@ function paintDocumentLineForeground({
   activeDeletedTextFades: Map<string, ActiveDeletedTextFade[]>;
   activeThreadIndex: number | null;
   activeInsertedTextHighlights: Map<string, ActiveInsertedTextHighlight[]>;
+  activeListMarkerPops: Map<string, ActiveListMarkerPop>;
   activePunctuationPulses: Map<string, ActivePunctuationPulse[]>;
   context: CanvasRenderingContext2D;
   editorState: EditorState;
@@ -459,6 +465,7 @@ function paintDocumentLineForeground({
   const containerPath = container?.path ?? "";
   const listItemEntry = findBlockAncestor(editorState, line.blockId, "listItem");
   const listMarker = listItemEntry ? resolveListItemMarker(editorState, listItemEntry.id) : null;
+  const listMarkerPop = listItemEntry ? activeListMarkerPops.get(listItemEntry.path) ?? null : null;
   const textLeft = line.left + resolveLineContentInset(editorState, line);
   const textBaseline = resolveCanvasLineTextBaseline(line);
   const defaultTextColor = snapshotBlock?.type === "code" ? theme.codeText : resolveCanvasTextColor(snapshotBlock, theme);
@@ -492,7 +499,7 @@ function paintDocumentLineForeground({
     activeThreadIndex,
     theme,
   );
-  paintListMarker(context, line, listMarker, textLeft, textBaseline, theme);
+  paintListMarker(context, line, listMarker, textLeft, textBaseline, theme, listMarkerPop);
   paintCanvasLineText(
     context,
     line,
