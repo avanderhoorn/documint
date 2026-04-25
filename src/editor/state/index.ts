@@ -25,7 +25,6 @@ export {
   createTableCellTarget,
   getSelectionContext,
   getSelectionMarks,
-  isSelectionCollapsed,
   normalizeSelection,
   resolveRegion,
   resolveRegionByPath,

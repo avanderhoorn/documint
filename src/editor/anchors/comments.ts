@@ -1,15 +1,33 @@
+/**
+ * Editor-side projection of comment threads.
+ *
+ * Comments themselves live on the semantic `Document` (anchored against text);
+ * this module is the bridge between that semantic state and the runtime
+ * `EditorState`. It owns three operations:
+ *
+ *   - Capture: build a thread from a live editor selection.
+ *   - Projection: resolve every persisted thread against the current snapshot
+ *     and emit live runtime ranges plus repaired thread copies.
+ *   - Edit-time repair: optimistically remap thread anchors during inline
+ *     edits so threads stay sticky to their text without a full re-resolve.
+ */
+
 import {
+  anchorKindForBlockType,
+  createAnchorFromContainer,
   createCommentThread,
-  createCommentAnchorFromContainer,
-  createCommentQuoteFromContainer,
+  extractQuoteFromContainer,
   resolveCommentThread,
+  type AnchorContainer,
   type CommentResolution,
   type CommentThread,
-} from "@/comments";
-import type { AnchorContainer } from "@/document";
+} from "@/document";
 import { resolveRegionByPath, type DocumentIndex, type EditorRegion } from "../state";
 import type { EditorState } from "../state/state";
 import { projectAnchorContainersToEditor } from "./index";
+import { remapEditedRange } from "./remap";
+
+// --- Types ---
 
 export type EditorCommentRange = {
   endOffset: number;
@@ -25,6 +43,11 @@ export type EditorCommentState = {
   threads: CommentThread[];
 };
 
+// --- Capture ---
+
+// Build a `CommentThread` from a live selection inside the editor. Returns
+// `null` if the body is empty, the selection is collapsed, or the selected
+// region isn't an anchorable kind (e.g. a list-item marker region).
 export function createCommentThreadForSelection(
   documentIndex: DocumentIndex,
   selection: {
@@ -41,19 +64,26 @@ export function createCommentThreadForSelection(
   }
 
   const region = documentIndex.regionIndex.get(selection.regionId) ?? null;
-  const container = region ? toCommentAnchorContainer(documentIndex, region) : null;
+  const container = region ? toAnchorContainer(documentIndex, region) : null;
 
   if (!container) {
     return null;
   }
 
   return createCommentThread({
-    anchor: createCommentAnchorFromContainer(container, selection.startOffset, selection.endOffset),
+    anchor: createAnchorFromContainer(container, selection.startOffset, selection.endOffset),
     body: normalizedBody,
-    quote: createCommentQuoteFromContainer(container, selection.startOffset, selection.endOffset),
+    quote: extractQuoteFromContainer(container, selection.startOffset, selection.endOffset),
   });
 }
 
+// --- Projection ---
+
+// Resolve every persisted thread against the current document snapshot and
+// emit live runtime ranges plus repaired thread copies. Threads whose anchors
+// don't resolve are silently dropped from `liveRanges` while their persisted
+// `threads` entry stays untouched, ready to repair when the document
+// changes again.
 export function getCommentState(state: EditorState): EditorCommentState;
 export function getCommentState(documentIndex: DocumentIndex): EditorCommentState;
 export function getCommentState(stateOrIndex: EditorState | DocumentIndex): EditorCommentState {
@@ -104,6 +134,13 @@ export function getCommentState(stateOrIndex: EditorState | DocumentIndex): Edit
   };
 }
 
+// --- Edit-time repair ---
+
+// Optimistically keep comments sticky within an edited region by remapping
+// each affected thread's live range through the splice math. General
+// resolution still runs against the next document snapshot via
+// `getCommentState`; this fast path just minimizes anchor drift for inline
+// edits where prefix/suffix context is about to shift.
 export function updateCommentThreadsForRegionEdit(
   documentIndex: DocumentIndex,
   nextDocumentIndex: DocumentIndex,
@@ -112,9 +149,6 @@ export function updateCommentThreadsForRegionEdit(
   selectionEnd: number,
   insertedText: string,
 ) {
-  // Optimistically keep comments sticky within the edited region by remapping
-  // the current live range through the text edit. General comment resolution
-  // still lives in src/comments and runs against the next Document snapshot.
   if (documentIndex.document.comments.length === 0) {
     return nextDocumentIndex.document.comments;
   }
@@ -130,9 +164,9 @@ export function updateCommentThreadsForRegionEdit(
   const liveRangesByThreadIndex = new Map(
     currentCommentState.liveRanges.map((range) => [range.threadIndex, range]),
   );
-  const currentContainer = toCommentAnchorContainer(documentIndex, region);
+  const currentContainer = toAnchorContainer(documentIndex, region);
   const nextRegion = resolveRegionByPath(nextDocumentIndex, region.path);
-  const nextContainer = nextRegion ? toCommentAnchorContainer(nextDocumentIndex, nextRegion) : null;
+  const nextContainer = nextRegion ? toAnchorContainer(nextDocumentIndex, nextRegion) : null;
 
   if (!currentContainer || !nextContainer) {
     return nextDocumentIndex.document.comments;
@@ -158,23 +192,26 @@ export function updateCommentThreadsForRegionEdit(
       insertedText.length,
     );
 
-    if (!nextRange) {
-      return thread;
-    }
-
     return {
       ...thread,
-      anchor: createCommentAnchorFromContainer(nextContainer, nextRange.start, nextRange.end),
-      quote: createCommentQuoteFromContainer(nextContainer, nextRange.start, nextRange.end),
+      anchor: createAnchorFromContainer(nextContainer, nextRange.start, nextRange.end),
+      quote: extractQuoteFromContainer(nextContainer, nextRange.start, nextRange.end),
     };
   });
 }
 
-function toCommentAnchorContainer(
+// --- Internal helpers ---
+
+// Adapt a runtime `EditorRegion` into the `AnchorContainer` shape used by the
+// document-layer anchor primitives. The `containerOrdinal: -1` is a sentinel:
+// edit-time use never disambiguates by ordinal (we already know exactly which
+// region we're touching), so we skip the ordinal computation. Returns `null`
+// when the region isn't an anchorable kind (list markers, etc.).
+function toAnchorContainer(
   documentIndex: DocumentIndex,
   region: EditorRegion,
 ): AnchorContainer | null {
-  const containerKind = resolveCommentAnchorContainerKind(documentIndex, region);
+  const containerKind = resolveAnchorContainerKind(documentIndex, region);
 
   if (!containerKind) {
     return null;
@@ -188,7 +225,7 @@ function toCommentAnchorContainer(
   };
 }
 
-function resolveCommentAnchorContainerKind(
+function resolveAnchorContainerKind(
   documentIndex: DocumentIndex,
   region: EditorRegion,
 ): AnchorContainer["containerKind"] | null {
@@ -196,48 +233,6 @@ function resolveCommentAnchorContainerKind(
     return "tableCell";
   }
 
-  switch (region.blockType) {
-    case "code":
-      return "code";
-    case "heading":
-    case "paragraph":
-      return "text";
-    default:
-      return null;
-  }
+  return anchorKindForBlockType(region.blockType);
 }
 
-function remapEditedRange(
-  start: number,
-  end: number,
-  editStart: number,
-  editEnd: number,
-  insertedLength: number,
-) {
-  const deletedLength = editEnd - editStart;
-  const delta = insertedLength - deletedLength;
-
-  if (editEnd <= start) {
-    return {
-      end: end + delta,
-      start: start + delta,
-    };
-  }
-
-  if (editStart >= end) {
-    return {
-      end,
-      start,
-    };
-  }
-
-  const preservedPrefixLength = Math.max(0, Math.min(editStart, end) - start);
-  const preservedSuffixLength = Math.max(0, end - Math.max(editEnd, start));
-  const nextStart = start < editStart ? start : editStart;
-  const nextEnd = nextStart + preservedPrefixLength + insertedLength + preservedSuffixLength;
-
-  return {
-    end: nextEnd,
-    start: nextStart,
-  };
-}

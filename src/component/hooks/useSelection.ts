@@ -1,17 +1,16 @@
 import type { Mark } from "@/document";
-import type { EditorCommentState } from "@/editor/annotations";
 import {
   getSelectionMarks,
   measureVisualCaretTarget,
   normalizeSelection,
   resolveDragFocus,
   setSelection,
+  type EditorCommentState,
   type EditorSelectionPoint,
   type EditorState,
   type EditorViewportState,
   type NormalizedEditorSelection,
 } from "@/editor";
-import { isSelectionCollapsed } from "@/editor/state";
 import type { LazyRefHandle } from "./useLazyRef";
 import {
   type PointerEvent,
@@ -277,7 +276,7 @@ function resolveSelectionHandles(
   viewport: EditorViewportState,
   selection: NormalizedEditorSelection,
 ): SelectionHandles | null {
-  if (isSelectionCollapsed(state.selection)) {
+  if (selection.collapsed) {
     return null;
   }
 

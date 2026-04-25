@@ -1,14 +1,26 @@
 /**
- * Resolves host-provided AI presence cursor targets against the current editor
- * document. Presence is ephemeral overlay state, so this module owns semantic
- * text matching only and leaves geometric measurement to layout/paint.
+ * Editor-side resolution of host-provided presence cursors.
+ *
+ * Presence is ephemeral overlay state — a remote user's caret, provided by
+ * the host as a content-addressable anchor. This module owns the semantic
+ * step of placing each cursor in the current document via the shared anchor
+ * algebra; geometric measurement (where it shows up in the viewport) is left
+ * to layout/paint.
  */
-import { type Anchor, type AnchorContainer } from "@/document";
+
+import {
+  findContextRanges,
+  findOccurrences,
+  type Anchor,
+  type AnchorContainer,
+} from "@/document";
 import type { Presence } from "@/types";
 import type { DocumentIndex, EditorSelectionPoint } from "../state";
 import { projectAnchorContainersToEditor } from "./index";
 
 export type { Presence };
+
+// --- Types ---
 
 export type EditorPresenceViewport = {
   scrollTop: number | null;
@@ -27,6 +39,12 @@ type PresenceMatch = {
   offset: number;
 };
 
+// --- Public API ---
+
+// Resolve each host-provided presence into an editor-side cursor point.
+// Cursors that don't resolve unambiguously (no match, or multiple equally
+// good matches) come back with `cursorPoint: null` so the caller can hide
+// them rather than guess.
 export function resolvePresenceCursors(
   documentIndex: DocumentIndex,
   presence: Presence[],
@@ -45,6 +63,8 @@ export function resolvePresenceCursors(
   }));
 }
 
+// --- Internal helpers ---
+
 function resolvePresenceCursorPoint(
   presence: Presence,
   semanticContainers: AnchorContainer[],
@@ -55,7 +75,7 @@ function resolvePresenceCursorPoint(
   }
 
   const candidateContainers = filterAnchorContainers(semanticContainers, presence.cursor);
-  const matches = collectPresenceAnchorMatches(candidateContainers, presence.cursor);
+  const matches = collectAnchorMatches(candidateContainers, presence.cursor);
 
   if (matches.length !== 1) {
     return null;
@@ -80,7 +100,10 @@ function filterAnchorContainers(containers: AnchorContainer[], anchor: Anchor) {
     : containers;
 }
 
-function collectPresenceAnchorMatches(containers: AnchorContainer[], anchor: Anchor) {
+// Dispatch on which side of the anchor descriptor is present. Presence does
+// not score; it requires an unambiguous match, so each branch returns raw
+// candidates and the caller filters by `length === 1`.
+function collectAnchorMatches(containers: AnchorContainer[], anchor: Anchor) {
   if (anchor.prefix && anchor.suffix) {
     return collectBetweenTextMatches(containers, anchor.prefix, anchor.suffix);
   }
@@ -101,14 +124,10 @@ function collectSingleTextMatches(
   text: string,
   side: "after" | "before",
 ) {
-  if (text.length === 0) {
-    return [];
-  }
-
   const matches: PresenceMatch[] = [];
 
   for (const container of containers) {
-    for (const startOffset of collectSubstringOffsets(container.text, text)) {
+    for (const startOffset of findOccurrences(container.text, text)) {
       matches.push({
         container,
         offset: side === "after" ? startOffset + text.length : startOffset,
@@ -120,43 +139,13 @@ function collectSingleTextMatches(
 }
 
 function collectBetweenTextMatches(containers: AnchorContainer[], prefix: string, suffix: string) {
-  if (prefix.length === 0 || suffix.length === 0) {
-    return [];
-  }
-
   const matches: PresenceMatch[] = [];
 
   for (const container of containers) {
-    for (const prefixIndex of collectSubstringOffsets(container.text, prefix)) {
-      const offset = prefixIndex + prefix.length;
-      const suffixIndex = container.text.indexOf(suffix, offset);
-
-      if (suffixIndex !== -1) {
-        matches.push({
-          container,
-          offset,
-        });
-      }
+    for (const range of findContextRanges(container.text, prefix, suffix)) {
+      matches.push({ container, offset: range.startOffset });
     }
   }
 
   return matches;
-}
-
-function collectSubstringOffsets(text: string, query: string) {
-  const offsets: number[] = [];
-  let searchIndex = 0;
-
-  while (searchIndex <= text.length) {
-    const matchIndex = text.indexOf(query, searchIndex);
-
-    if (matchIndex === -1) {
-      break;
-    }
-
-    offsets.push(matchIndex);
-    searchIndex = matchIndex + Math.max(1, query.length);
-  }
-
-  return offsets;
 }

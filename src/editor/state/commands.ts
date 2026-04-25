@@ -24,7 +24,7 @@ import type { EditorAction } from "./index/types";
 import {
   createCommentThreadForSelection,
   getCommentState,
-} from "../annotations";
+} from "../anchors";
 import {
   type InlineCommandReplacement,
   replaceExactInlineLinkRange,
@@ -39,7 +39,7 @@ import {
   markCommentThreadAsResolved as markThreadResolved,
   replyToCommentThread as replyToThread,
   type CommentThread,
-} from "@/comments";
+} from "@/document";
 import { resolveTextInputRule } from "./index/actions/input-rules";
 import {
   resolveListItemDedent,

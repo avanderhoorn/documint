@@ -19,6 +19,7 @@ export type EditorSelection = {
 };
 
 export type NormalizedEditorSelection = {
+  collapsed: boolean;
   end: EditorSelectionPoint;
   start: EditorSelectionPoint;
 };
@@ -116,7 +117,7 @@ export function resolveTableCellRegion(
   return regionId ? (documentIndex.regionIndex.get(regionId) ?? null) : null;
 }
 
-export function isSelectionCollapsed(selection: EditorSelection): boolean {
+function isSelectionCollapsed(selection: EditorSelection): boolean {
   return (
     selection.anchor.regionId === selection.focus.regionId &&
     selection.anchor.offset === selection.focus.offset
@@ -136,17 +137,20 @@ export function normalizeSelection(
 ): NormalizedEditorSelection {
   const documentIndex = "documentIndex" in stateOrIndex ? stateOrIndex.documentIndex : stateOrIndex;
   const sel = "documentIndex" in stateOrIndex ? stateOrIndex.selection : selection!;
+  const collapsed = isSelectionCollapsed(sel);
   const anchorOrder = resolveSelectionOrder(documentIndex, sel.anchor);
   const focusOrder = resolveSelectionOrder(documentIndex, sel.focus);
 
   if (anchorOrder <= focusOrder) {
     return {
+      collapsed,
       end: sel.focus,
       start: sel.anchor,
     };
   }
 
   return {
+    collapsed,
     end: sel.anchor,
     start: sel.focus,
   };

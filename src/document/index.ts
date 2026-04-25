@@ -4,6 +4,7 @@
 
 export * from "./anchors";
 export * from "./build";
+export * from "./comments";
 export * from "./document";
 export * from "./query";
 export * from "./types";

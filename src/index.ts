@@ -27,4 +27,4 @@ export type {
   Text,
 } from "./document";
 
-export type { CommentThread, Comment } from "./comments";
+export type { CommentThread, Comment } from "./document";

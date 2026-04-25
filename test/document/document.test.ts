@@ -1,10 +1,8 @@
 import { expect, test } from "bun:test";
 import {
-  createCommentAnchorFromContainer,
-  createCommentQuoteFromContainer,
+  createAnchorFromContainer,
   createCommentThread,
-} from "@/comments";
-import {
+  extractQuoteFromContainer,
   createDocument,
   spliceCommentThreads,
   spliceDocument,
@@ -132,16 +130,16 @@ test("splices comment threads without rebuilding semantic blocks", () => {
   }
 
   const firstThread = createCommentThread({
-    anchor: createCommentAnchorFromContainer(container, 0, 5),
+    anchor: createAnchorFromContainer(container, 0, 5),
     body: "First",
     createdAt: "2026-04-11T12:00:00.000Z",
-    quote: createCommentQuoteFromContainer(container, 0, 5),
+    quote: extractQuoteFromContainer(container, 0, 5),
   });
   const secondThread = createCommentThread({
-    anchor: createCommentAnchorFromContainer(container, 6, 10),
+    anchor: createAnchorFromContainer(container, 6, 10),
     body: "Second",
     createdAt: "2026-04-11T12:01:00.000Z",
-    quote: createCommentQuoteFromContainer(container, 6, 10),
+    quote: extractQuoteFromContainer(container, 6, 10),
   });
   const nextDocument = spliceCommentThreads(
     {

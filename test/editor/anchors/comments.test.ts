@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import {
-  createCommentAnchorFromContainer,
-  createCommentQuoteFromContainer,
+  createAnchorFromContainer,
   createCommentThread,
-} from "@/comments";
-import { listAnchorContainers } from "@/document";
-import { getCommentState } from "@/editor/annotations";
+  extractQuoteFromContainer,
+  listAnchorContainers,
+} from "@/document";
+import { getCommentState } from "@/editor/anchors";
 import {
   createCanvasRenderCache,
   createCommentThread as createEditorCommentThread,
@@ -28,10 +28,10 @@ test("maps durable comment anchors to live canvas ranges", () => {
   }
 
   const thread = createCommentThread({
-    anchor: createCommentAnchorFromContainer(container, 7, 14),
+    anchor: createAnchorFromContainer(container, 7, 14),
     body: "Highlight anchors",
     createdAt: "2026-04-05T12:00:00.000Z",
-    quote: createCommentQuoteFromContainer(container, 7, 14),
+    quote: extractQuoteFromContainer(container, 7, 14),
   });
   const state = createEditorState({
     ...snapshot,
@@ -57,10 +57,10 @@ test("resolves link hover targets with overlapping comment metadata", () => {
   }
 
   const thread = createCommentThread({
-    anchor: createCommentAnchorFromContainer(container, 15, 19),
+    anchor: createAnchorFromContainer(container, 15, 19),
     body: "Review this link",
     createdAt: "2026-04-11T12:00:00.000Z",
-    quote: createCommentQuoteFromContainer(container, 15, 19),
+    quote: extractQuoteFromContainer(container, 15, 19),
   });
   const state = createEditorState({
     ...document,
@@ -186,10 +186,10 @@ test("keeps same-region comments sticky while typing inside the anchored quote",
   }
 
   const thread = createCommentThread({
-    anchor: createCommentAnchorFromContainer(container, 1, 3),
+    anchor: createAnchorFromContainer(container, 1, 3),
     body: "Track this span",
     createdAt: "2026-04-18T12:00:00.000Z",
-    quote: createCommentQuoteFromContainer(container, 1, 3),
+    quote: extractQuoteFromContainer(container, 1, 3),
   });
   let state = createEditorState({
     ...document,

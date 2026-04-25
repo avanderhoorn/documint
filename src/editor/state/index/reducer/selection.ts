@@ -23,7 +23,7 @@ import {
   type Inline,
   type TableCell,
 } from "@/document";
-import { updateCommentThreadsForRegionEdit } from "../../../annotations";
+import { updateCommentThreadsForRegionEdit } from "../../../anchors";
 import { replaceIndexedDocument, spliceDocumentIndex } from "../build";
 import { compactInlineNodes } from "../shared";
 import type {

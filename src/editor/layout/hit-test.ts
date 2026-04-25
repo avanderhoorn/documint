@@ -1,4 +1,4 @@
-import type { EditorCommentRange } from "../annotations";
+import type { EditorCommentRange } from "../anchors";
 import type { EditorState, EditorSelectionPoint, EditorListItemMarker } from "../state";
 import { measureCanvasTextWidth } from "../canvas/font-metrics";
 import {

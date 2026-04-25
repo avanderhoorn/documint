@@ -21,4 +21,4 @@ The important boundary is that `src/editor` owns the capabilities in that pipeli
 
 - **Canvas** (`canvas/`) - Owns canvas-specific code: immediate-mode painting from prepared layout plus editor/runtime inputs (selection, comments, presence, animations, theme), and shared canvas-measurement primitives (font metrics, prepared-text cache) that both paint and layout consume. Includes `paintContent` and `paintOverlay` wrappers that translate `EditorViewportState` into raw paint params.
 
-- **Annotations** (`annotations/`) - Owns editor-side projection of durable annotation semantics into live runtime data: comment range projection, presence cursor resolution, and optimistic same-region comment remapping during direct edits.
+- **Anchors** (`anchors/`) - Owns editor-side runtime support for content-addressable anchors: projection of comment threads to live ranges, resolution of presence cursors, and edit-time offset remap shared across anchored consumers.

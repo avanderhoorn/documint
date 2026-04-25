@@ -50,10 +50,9 @@ At the repo root, think in terms of altitude and orchestration:
 
 Each subsystem has its own `AGENTS.md` with the lower-level boundaries and ownership.
 
-- [`src/document`](src/document/AGENTS.md) - Closed, immutable semantic document model.
+- [`src/document`](src/document/AGENTS.md) - Closed, immutable semantic document model, including comment threads as anchored annotations.
 - [`src/markdown`](src/markdown/AGENTS.md) - Markdown parsing and serialization boundary, implemented as a bespoke direct `markdown → Document → markdown` pipeline.
 - [`src/editor`](src/editor/AGENTS.md) - Framework-agnostic editing engine: `Document` → `EditorModel` → `ViewportLayout` → canvas.
-- [`src/comments`](src/comments/AGENTS.md) - Anchored comment persistence, repair, and thread mutations.
 - [`src/component`](src/component/AGENTS.md) - React host: content bridging, browser lifecycle, and leaf UI.
 - `playground` - Dogfooding app for exercising real browser behavior.
 - `scripts` - Build, packaging, and benchmark automation.

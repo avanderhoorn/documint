@@ -1,15 +1,18 @@
-// Host-side reconciliation for external content snapshots. This module keeps
-// focus sticky across a rebuilt editor state without entering the local editing
-// action-dispatch path.
-//
-// Reconciles:
-// - equivalent selections across stable, moved, or edited text regions
-// - cursor/range offsets when text is inserted or deleted around the selection
-// - transient empty root paragraphs that markdown rebuilds cannot represent
-//
-// Intentionally does not attempt full document rebase. Ambiguous duplicate
-// regions, structural rewrites, nested empty blocks, and deleted selection
-// endpoints fall back to the caller's reload behavior.
+/**
+ * Host-side reconciliation for external content snapshots. Keeps focus
+ * sticky across a rebuilt editor state without entering the local editing
+ * action-dispatch path.
+ *
+ * Reconciles:
+ *   - equivalent selections across stable, moved, or edited text regions
+ *   - cursor/range offsets when text is inserted or deleted around the selection
+ *   - transient empty root paragraphs that markdown rebuilds cannot represent
+ *
+ * Intentionally does not attempt full document rebase. Ambiguous duplicate
+ * regions, structural rewrites, nested empty blocks, and deleted selection
+ * endpoints fall back to the caller's reload behavior.
+ */
+
 import {
   createRootPrimaryRegionTarget,
   resolveSelectionTarget,
@@ -20,9 +23,15 @@ import {
   type EditorSelectionPoint,
   type EditorState,
 } from "@/editor/state";
-import { createParagraphTextBlock, spliceDocument } from "@/document";
+import {
+  captureContextWindows,
+  clamp,
+  createParagraphTextBlock,
+  findContextRanges,
+  findOccurrences,
+  spliceDocument,
+} from "@/document";
 
-const offsetContextWindow = 24;
 type OffsetAffinity = "after-prefix" | "before-suffix" | "neutral";
 type RootScanDirection = "after" | "before";
 
@@ -31,12 +40,14 @@ export type ExternalContentReconciliation = {
   state: EditorState;
 };
 
+// --- Public API ---
+
 export function reconcileExternalContentChange(
   previousState: EditorState | null,
   nextState: EditorState,
 ): ExternalContentReconciliation {
   if (!previousState) {
-    return unreconciled(nextState);
+    return { didReconcile: false, state: nextState };
   }
 
   // Prefer semantic region/offset repair. Recreate transient empty paragraphs
@@ -45,23 +56,16 @@ export function reconcileExternalContentChange(
     restoreEquivalentSelection(previousState, nextState) ??
     restoreTransientEmptyParagraphSelection(previousState, nextState);
 
-  return restoredState ? reconciled(restoredState) : unreconciled(nextState);
+  return restoredState
+    ? { didReconcile: true, state: restoredState }
+    : { didReconcile: false, state: nextState };
 }
 
-function reconciled(state: EditorState): ExternalContentReconciliation {
-  return {
-    didReconcile: true,
-    state,
-  };
-}
+// --- Selection rebase ---
 
-function unreconciled(state: EditorState): ExternalContentReconciliation {
-  return {
-    didReconcile: false,
-    state,
-  };
-}
-
+// Apply the equivalent selection (if any) to `nextState`. Exposed so tests
+// can observe the post-rebase selection without re-running the whole
+// reconcile.
 export function restoreEquivalentSelection(
   previousState: EditorState,
   nextState: EditorState,
@@ -71,6 +75,9 @@ export function restoreEquivalentSelection(
   return equivalentSelection ? setSelection(nextState, equivalentSelection, false) : null;
 }
 
+// Compute the selection in `nextState` that semantically matches the
+// selection in `previousState`. Returns `null` when either endpoint cannot
+// be unambiguously placed, signaling the caller to fall back.
 export function resolveEquivalentSelection(
   previousState: EditorState,
   nextState: EditorState,
@@ -127,6 +134,14 @@ function resolveEquivalentSelectionPoint(
   };
 }
 
+// Find the region in `nextState` that semantically corresponds to
+// `previousRegion`. Strategies in priority order:
+//   1. Same id survived → use it.
+//   2. Empty text isn't a stable anchor (markdown rebuilds drop empties) → null.
+//   3. Region with matching block kind and identical text appears exactly
+//      once in `nextState` → use it.
+//   4. Same path → use it (after unique-text because paths shift when
+//      content is inserted above the selection).
 function resolveEquivalentRegion(previousRegion: EditorRegion, nextState: EditorState) {
   const sameIdRegion = nextState.documentIndex.regionIndex.get(previousRegion.id);
 
@@ -134,166 +149,17 @@ function resolveEquivalentRegion(previousRegion: EditorRegion, nextState: Editor
     return sameIdRegion;
   }
 
-  // Empty text is not a stable semantic anchor: markdown rebuilds can drop
-  // transient empty paragraphs, and path matching could point at unrelated text.
   if (previousRegion.text.length === 0) {
     return null;
   }
 
-  // Path-based matching is intentionally after unique text matching because
-  // paths can shift when external content inserts blocks above the selection.
   const uniqueTextRegion = resolveUniqueTextRegion(previousRegion, nextState);
 
   if (uniqueTextRegion) {
     return uniqueTextRegion;
   }
 
-  const samePathRegion = nextState.documentIndex.regionPathIndex.get(previousRegion.path);
-
-  if (samePathRegion) {
-    return samePathRegion;
-  }
-
-  return null;
-}
-
-function restoreTransientEmptyParagraphSelection(
-  previousState: EditorState,
-  nextState: EditorState,
-) {
-  if (!areSelectionPointsEqual(previousState.selection.anchor, previousState.selection.focus)) {
-    return null;
-  }
-
-  const previousRegion = resolveSelectedEmptyRootParagraph(previousState);
-
-  if (!previousRegion) {
-    return null;
-  }
-
-  const insertionRootIndex = resolveRecreatedEmptyParagraphRootIndex(
-    previousState,
-    nextState,
-    previousRegion,
-  );
-
-  if (insertionRootIndex === null) {
-    return null;
-  }
-
-  return recreateEmptyRootParagraphSelection(nextState, insertionRootIndex);
-}
-
-function resolveSelectedEmptyRootParagraph(state: EditorState) {
-  const region = state.documentIndex.regionIndex.get(state.selection.focus.regionId);
-
-  if (!region || region.blockType !== "paragraph" || region.text.length > 0) {
-    return null;
-  }
-
-  const block = state.documentIndex.blockIndex.get(region.blockId);
-
-  return block?.parentBlockId === null ? region : null;
-}
-
-function recreateEmptyRootParagraphSelection(nextState: EditorState, rootIndex: number) {
-  const nextDocument = spliceDocument(nextState.documentIndex.document, rootIndex, 0, [
-    createParagraphTextBlock({ text: "" }),
-  ]);
-  const restoredState = {
-    ...nextState,
-    documentIndex: spliceDocumentIndex(nextState.documentIndex, nextDocument, rootIndex, 0),
-  };
-  const selection = resolveSelectionTarget(
-    restoredState.documentIndex,
-    createRootPrimaryRegionTarget(rootIndex),
-  );
-
-  return selection ? setSelection(restoredState, selection, false) : null;
-}
-
-function resolveRecreatedEmptyParagraphRootIndex(
-  previousState: EditorState,
-  nextState: EditorState,
-  previousRegion: EditorRegion,
-) {
-  // A transient empty paragraph is restored by anchoring it to the nearest
-  // surviving non-empty root content around its previous position. Structural
-  // roots without their own text use a child region as the stable anchor.
-  const precedingRegion = resolveNearestNonEmptyRootAnchorRegion(
-    previousState,
-    previousRegion.rootIndex,
-    "before",
-  );
-  const followingRegion = resolveNearestNonEmptyRootAnchorRegion(
-    previousState,
-    previousRegion.rootIndex,
-    "after",
-  );
-  const precedingMatch = precedingRegion
-    ? resolveEquivalentRegion(precedingRegion, nextState)
-    : null;
-  const followingMatch = followingRegion
-    ? resolveEquivalentRegion(followingRegion, nextState)
-    : null;
-
-  if (precedingMatch && followingMatch) {
-    return precedingMatch.rootIndex < followingMatch.rootIndex ? followingMatch.rootIndex : null;
-  }
-
-  if (precedingMatch) {
-    return precedingMatch.rootIndex + 1;
-  }
-
-  if (followingMatch) {
-    return followingMatch.rootIndex;
-  }
-
-  return null;
-}
-
-function resolveNearestNonEmptyRootAnchorRegion(
-  state: EditorState,
-  rootIndex: number,
-  direction: RootScanDirection,
-) {
-  const step = direction === "before" ? -1 : 1;
-
-  for (
-    let index = rootIndex + step;
-    index >= 0 && index < state.documentIndex.roots.length;
-    index += step
-  ) {
-    const region = resolveRootAnchorRegion(state, index, direction);
-
-    if (!region) {
-      continue;
-    }
-
-    return region;
-  }
-
-  return null;
-}
-
-function resolveRootAnchorRegion(
-  state: EditorState,
-  rootIndex: number,
-  direction: RootScanDirection,
-) {
-  const regions = state.documentIndex.roots[rootIndex]?.regions ?? [];
-  const start = direction === "before" ? regions.length - 1 : 0;
-  const step = direction === "before" ? -1 : 1;
-
-  for (let index = start; index >= 0 && index < regions.length; index += step) {
-    const region = regions[index];
-
-    if (region && region.text.length > 0) {
-      return region;
-    }
-  }
-
-  return null;
+  return nextState.documentIndex.regionPathIndex.get(previousRegion.path) ?? null;
 }
 
 function resolveUniqueTextRegion(previousRegion: EditorRegion, nextState: EditorState) {
@@ -317,6 +183,11 @@ function resolveUniqueTextRegion(previousRegion: EditorRegion, nextState: Editor
   return match;
 }
 
+// Translate `offset` from `previousText` to `nextText` using the surrounding
+// `CONTEXT_WINDOW` characters as a content-addressable fingerprint. Tries
+// (in order): unique prefix-suffix sandwich, unique prefix, unique suffix,
+// then clamps to the new text length as a last resort. `affinity` decides
+// whether prefix or suffix wins when both produce a candidate.
 function resolveEquivalentOffset(
   previousText: string,
   nextText: string,
@@ -324,13 +195,10 @@ function resolveEquivalentOffset(
   affinity: OffsetAffinity,
 ) {
   const previousOffset = clamp(offset, 0, previousText.length);
-  const prefix = previousText.slice(
-    Math.max(0, previousOffset - offsetContextWindow),
+  const { prefix, suffix } = captureContextWindows(
+    previousText,
     previousOffset,
-  );
-  const suffix = previousText.slice(
     previousOffset,
-    Math.min(previousText.length, previousOffset + offsetContextWindow),
   );
 
   const contextOffset = resolveOffsetBetweenContext(nextText, prefix, suffix);
@@ -350,70 +218,27 @@ function resolveEquivalentOffset(
 }
 
 function resolveOffsetBetweenContext(text: string, prefix: string, suffix: string) {
-  if (prefix.length === 0 || suffix.length === 0) {
-    return null;
-  }
+  // Selection rebase wants prefix and suffix to bracket a single point — i.e.,
+  // the suffix starts exactly where the prefix ends. The shared primitive
+  // returns every (startOffset, endOffset) pair; we filter to point matches
+  // and require uniqueness.
+  const points = findContextRanges(text, prefix, suffix).filter(
+    (range) => range.startOffset === range.endOffset,
+  );
 
-  let resolvedOffset: number | null = null;
-  let prefixSearchIndex = 0;
-
-  while (prefixSearchIndex <= text.length) {
-    const prefixIndex = text.indexOf(prefix, prefixSearchIndex);
-
-    if (prefixIndex === -1) {
-      break;
-    }
-
-    const offset = prefixIndex + prefix.length;
-
-    if (text.startsWith(suffix, offset)) {
-      if (resolvedOffset !== null) {
-        return null;
-      }
-
-      resolvedOffset = offset;
-    }
-
-    prefixSearchIndex = prefixIndex + Math.max(1, prefix.length);
-  }
-
-  return resolvedOffset;
+  return points.length === 1 ? points[0].startOffset : null;
 }
 
 function resolveOffsetAfterUniquePrefix(text: string, prefix: string) {
-  if (prefix.length === 0) {
-    return null;
-  }
+  const occurrences = findOccurrences(text, prefix);
 
-  const index = resolveUniqueSubstringIndex(text, prefix);
-
-  return index === null ? null : index + prefix.length;
+  return occurrences.length === 1 ? occurrences[0] + prefix.length : null;
 }
 
 function resolveOffsetBeforeUniqueSuffix(text: string, suffix: string) {
-  return suffix.length === 0 ? null : resolveUniqueSubstringIndex(text, suffix);
-}
+  const occurrences = findOccurrences(text, suffix);
 
-function resolveUniqueSubstringIndex(text: string, query: string) {
-  let match: number | null = null;
-  let searchIndex = 0;
-
-  while (searchIndex <= text.length) {
-    const index = text.indexOf(query, searchIndex);
-
-    if (index === -1) {
-      break;
-    }
-
-    if (match !== null) {
-      return null;
-    }
-
-    match = index;
-    searchIndex = index + Math.max(1, query.length);
-  }
-
-  return match;
+  return occurrences.length === 1 ? occurrences[0] : null;
 }
 
 function resolveSelectionPointAffinity(state: EditorState): {
@@ -459,10 +284,155 @@ function compareSelectionPoints(
     : leftRegionIndex - rightRegionIndex;
 }
 
-function areSelectionPointsEqual(left: EditorSelectionPoint, right: EditorSelectionPoint) {
-  return left.regionId === right.regionId && left.offset === right.offset;
+// --- Empty paragraph repair ---
+
+// Recreate a transient empty root paragraph that markdown round-trip dropped.
+// Only fires when the previous selection was a collapsed caret in such a
+// paragraph and a stable surviving root nearby can anchor the recreation.
+function restoreTransientEmptyParagraphSelection(
+  previousState: EditorState,
+  nextState: EditorState,
+) {
+  if (!areSelectionPointsEqual(previousState.selection.anchor, previousState.selection.focus)) {
+    return null;
+  }
+
+  const previousRegion = resolveSelectedEmptyRootParagraph(previousState);
+
+  if (!previousRegion) {
+    return null;
+  }
+
+  const insertionRootIndex = resolveRecreatedEmptyParagraphRootIndex(
+    previousState,
+    nextState,
+    previousRegion,
+  );
+
+  if (insertionRootIndex === null) {
+    return null;
+  }
+
+  return recreateEmptyRootParagraphSelection(nextState, insertionRootIndex);
 }
 
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(value, max));
+function resolveSelectedEmptyRootParagraph(state: EditorState) {
+  const region = state.documentIndex.regionIndex.get(state.selection.focus.regionId);
+
+  if (!region || region.blockType !== "paragraph" || region.text.length > 0) {
+    return null;
+  }
+
+  const block = state.documentIndex.blockIndex.get(region.blockId);
+
+  return block?.parentBlockId === null ? region : null;
+}
+
+// Pick the rootIndex in `nextState` where to insert the recreated empty
+// paragraph by anchoring it to the nearest surviving non-empty root content
+// around its previous position. Returns `null` when neither neighbor
+// survives or when the surviving neighbors are out of order (a structural
+// rewrite we shouldn't second-guess).
+function resolveRecreatedEmptyParagraphRootIndex(
+  previousState: EditorState,
+  nextState: EditorState,
+  previousRegion: EditorRegion,
+) {
+  const precedingRegion = findNearestNonEmptyRootRegion(
+    previousState,
+    previousRegion.rootIndex,
+    "before",
+  );
+  const followingRegion = findNearestNonEmptyRootRegion(
+    previousState,
+    previousRegion.rootIndex,
+    "after",
+  );
+  const precedingMatch = precedingRegion
+    ? resolveEquivalentRegion(precedingRegion, nextState)
+    : null;
+  const followingMatch = followingRegion
+    ? resolveEquivalentRegion(followingRegion, nextState)
+    : null;
+
+  if (precedingMatch && followingMatch) {
+    return precedingMatch.rootIndex < followingMatch.rootIndex ? followingMatch.rootIndex : null;
+  }
+
+  if (precedingMatch) {
+    return precedingMatch.rootIndex + 1;
+  }
+
+  if (followingMatch) {
+    return followingMatch.rootIndex;
+  }
+
+  return null;
+}
+
+function recreateEmptyRootParagraphSelection(nextState: EditorState, rootIndex: number) {
+  const nextDocument = spliceDocument(nextState.documentIndex.document, rootIndex, 0, [
+    createParagraphTextBlock({ text: "" }),
+  ]);
+  const restoredState = {
+    ...nextState,
+    documentIndex: spliceDocumentIndex(nextState.documentIndex, nextDocument, rootIndex, 0),
+  };
+  const selection = resolveSelectionTarget(
+    restoredState.documentIndex,
+    createRootPrimaryRegionTarget(rootIndex),
+  );
+
+  return selection ? setSelection(restoredState, selection, false) : null;
+}
+
+// Walk roots outward from `rootIndex` in `direction` and return the first
+// non-empty region encountered. Used as a stable reference when recreating
+// a transient empty paragraph the markdown round-trip dropped.
+function findNearestNonEmptyRootRegion(
+  state: EditorState,
+  rootIndex: number,
+  direction: RootScanDirection,
+) {
+  const step = direction === "before" ? -1 : 1;
+
+  for (
+    let index = rootIndex + step;
+    index >= 0 && index < state.documentIndex.roots.length;
+    index += step
+  ) {
+    const region = findFirstNonEmptyRegionInRoot(state, index, direction);
+
+    if (region) {
+      return region;
+    }
+  }
+
+  return null;
+}
+
+function findFirstNonEmptyRegionInRoot(
+  state: EditorState,
+  rootIndex: number,
+  direction: RootScanDirection,
+) {
+  const regions = state.documentIndex.roots[rootIndex]?.regions ?? [];
+  const start = direction === "before" ? regions.length - 1 : 0;
+  const step = direction === "before" ? -1 : 1;
+
+  for (let index = start; index >= 0 && index < regions.length; index += step) {
+    const region = regions[index];
+
+    if (region && region.text.length > 0) {
+      return region;
+    }
+  }
+
+  return null;
+}
+
+// --- Internal helpers ---
+
+function areSelectionPointsEqual(left: EditorSelectionPoint, right: EditorSelectionPoint) {
+  return left.regionId === right.regionId && left.offset === right.offset;
 }

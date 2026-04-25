@@ -1,10 +1,10 @@
 import {
   resolveHoverTarget as resolveHoverTargetAtViewport,
+  type EditorCommentState,
   type EditorHoverTarget,
   type EditorState,
   type EditorViewportState,
 } from "@/editor";
-import type { EditorCommentState } from "@/editor/annotations";
 import type { LazyRefHandle } from "./useLazyRef";
 import {
   type MouseEvent,

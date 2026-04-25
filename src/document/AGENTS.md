@@ -2,7 +2,7 @@
 
 This sub-system owns the closed, immutable, format-agnostic semantic document model. It defines `Document` and all block/inline node types as discriminated unions, provides deterministic ID generation and `plainText` extraction during canonical construction, and exposes a typed visitor for tree traversal. The data model is intentionally closed — node types don't change at runtime — so exhaustive switches are the primary extension mechanism. Every other subsystem builds on this model without modifying it.
 
-The document layer may also expose small semantic helpers that operate purely on `Document` itself. In particular, content-addressable anchor discovery belongs here when it describes how semantic document content can be enumerated and identified without depending on editor/runtime concepts.
+The document layer also owns the **anchor algebra**: the content-addressable position vocabulary and primitives that comments, presence cursors, and selection rebase compose into their own policies.
 
 ### Key Files
 
@@ -16,4 +16,6 @@ The document layer may also expose small semantic helpers that operate purely on
 
 - `query.ts` - Owns small semantic queries built on the shared walker, such as image discovery and block lookup.
 
-- `anchors.ts` - Owns document-level anchor container discovery for content-addressable consumers such as comments and editor annotations.
+- `anchors.ts` - Owns the anchor algebra: the content-addressable position vocabulary, container discovery, and fingerprint capture/search/verification primitives consumed by comments, presence, and selection rebase.
+
+- `comments/` - Owns comment threads as anchored annotations on the document: persisted thread shape, immutable thread CRUD, defensive parsing of untrusted payloads, and the quote/context-based resolution policy that scores threads against the current snapshot using the shared anchor algebra.

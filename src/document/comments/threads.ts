@@ -2,7 +2,7 @@
  * Immutable CRUD operations and queries for comment threads.
  */
 
-import { Anchor } from "@/document";
+import type { Anchor } from "../anchors";
 import type { Comment, CommentThread } from "./types";
 
 export function createCommentThread(options: {

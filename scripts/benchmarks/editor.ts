@@ -1,11 +1,11 @@
 import {
-  createCommentAnchorFromContainer,
-  createCommentQuoteFromContainer,
+  createAnchorFromContainer,
   createCommentThread,
+  extractQuoteFromContainer,
+  listAnchorContainers,
   markCommentThreadAsResolved,
-} from "@/comments";
-import { listAnchorContainers } from "@/document";
-import { getCommentState } from "@/editor/annotations";
+} from "@/document";
+import { getCommentState } from "@/editor/anchors";
 import {
   createDocumentFromEditorState,
   createEditorState,
@@ -254,10 +254,10 @@ function createDenseCommentSnapshot(
     const endOffset = Math.min(primaryContainer.text.length, startOffset + 6);
 
     return createCommentThread({
-      anchor: createCommentAnchorFromContainer(primaryContainer, startOffset, endOffset),
+      anchor: createAnchorFromContainer(primaryContainer, startOffset, endOffset),
       body: `Dense benchmark ${index + 1}`,
       createdAt: `2026-04-05T12:${String(index).padStart(2, "0")}:00.000Z`,
-      quote: createCommentQuoteFromContainer(primaryContainer, startOffset, endOffset),
+      quote: extractQuoteFromContainer(primaryContainer, startOffset, endOffset),
     });
   });
 

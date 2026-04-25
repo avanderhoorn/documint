@@ -12,8 +12,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { countResolvedCommentThreads, isResolvedCommentThread } from "@/comments";
-import type { Document } from "@/document";
+import {
+  countResolvedCommentThreads,
+  isResolvedCommentThread,
+  type Document,
+} from "@/document";
 import {
   createCommentThread,
   createEditorState,
@@ -27,7 +30,6 @@ import {
   getDocument,
   getSelectionContext,
   hasNewAnimation,
-  hasRunningAnimations,
   insertTable,
   insertTableColumn,
   insertTableRow,
@@ -357,8 +359,7 @@ export function Documint({
   });
 
   const { scheduleRender } = useRenderScheduler({
-    hasRunningAnimations: () =>
-      hasRunningAnimations(editorStateRef.current ?? editorState, performance.now()),
+    editorStateRef,
     renderContent,
     renderOverlay,
     renderViewport,

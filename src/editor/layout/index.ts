@@ -3,7 +3,7 @@
 // where a caret should render within the prepared layout.
 
 import type { Block, Mark } from "@/document";
-import type { EditorCommentState, EditorPresence } from "../annotations";
+import type { EditorCommentState, EditorPresence } from "../anchors";
 import type { CanvasRenderCache } from "../canvas/cache";
 import type { DocumentResources } from "@/types";
 import type { EditorSelectionPoint, EditorState, NormalizedEditorSelection } from "../state";

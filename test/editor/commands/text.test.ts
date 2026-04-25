@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import {
-  createCommentAnchorFromContainer,
-  createCommentQuoteFromContainer,
+  createAnchorFromContainer,
   createCommentThread,
-} from "@/comments";
-import { listAnchorContainers } from "@/document";
+  extractQuoteFromContainer,
+  listAnchorContainers,
+} from "@/document";
 import {
   createDocumentFromEditorState,
   createEditorState,
@@ -306,10 +306,10 @@ test("preserves comment threads anchored before a cross-region edit", () => {
   }
 
   const thread = createCommentThread({
-    anchor: createCommentAnchorFromContainer(firstContainer, 0, 5),
+    anchor: createAnchorFromContainer(firstContainer, 0, 5),
     body: "anchor",
     createdAt: "2026-04-22T00:00:00.000Z",
-    quote: createCommentQuoteFromContainer(firstContainer, 0, 5),
+    quote: extractQuoteFromContainer(firstContainer, 0, 5),
   });
   let state = createEditorState({ ...snapshot, comments: [thread] });
   const [first, second] = state.documentIndex.regions;

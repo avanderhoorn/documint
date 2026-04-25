@@ -1,42 +1,47 @@
 /**
- * Comment anchor construction and the quote/context-based resolution algorithm
- * that re-attaches comment threads against the current document snapshot.
+ * Comment thread resolution: re-attach threads against the current document
+ * snapshot using quote/context-based scoring on top of the document-layer
+ * anchor primitives.
+ *
+ * The strategy is two-pass:
+ *   1. Exact-quote pass — find every container where the persisted quote
+ *      appears verbatim. Context (prefix/suffix matches) breaks ties.
+ *   2. Context-only pass — when no verbatim quote exists, treat prefix and
+ *      suffix as the anchor and estimate the missing edge from the prior
+ *      quote length.
+ *
+ * Comments owns the policy: scoring weights, similarity heuristics, and how
+ * `matched` vs `repaired` is decided. The substrate (search, capture,
+ * verification) lives in `src/document/anchors.ts`.
  */
-import type { Anchor, AnchorContainer, AnchorMatch, AnchorResolutionStatus, Document } from "@/document";
-import { listAnchorContainers, normalizeAnchorKind, DEFAULT_ANCHOR_KIND } from "@/document";
+
+import type { Document } from "../types";
+import {
+  clamp,
+  createAnchorFromContainer,
+  DEFAULT_ANCHOR_KIND,
+  extractQuoteFromContainer,
+  findContextRanges,
+  findOccurrences,
+  listAnchorContainers,
+  prefixMatchesAt,
+  suffixMatchesAt,
+  type AnchorContainer,
+  type AnchorMatch,
+  type AnchorResolutionStatus,
+} from "../anchors";
 import type { CommentResolution, CommentThread } from "./types";
 
-const CONTEXT_WINDOW = 24;
+// --- Scoring weights ---
 
-export function createCommentAnchorFromContainer(
-  container: AnchorContainer,
-  startOffset: number,
-  endOffset: number,
-): Anchor {
-  const normalizedStart = clamp(startOffset, 0, container.text.length);
-  const normalizedEnd = clamp(endOffset, normalizedStart, container.text.length);
-
-  return {
-    kind: normalizeAnchorKind(container.containerKind),
-    prefix:
-      container.text.slice(Math.max(0, normalizedStart - CONTEXT_WINDOW), normalizedStart) ||
-      undefined,
-    suffix: container.text.slice(normalizedEnd, normalizedEnd + CONTEXT_WINDOW) || undefined,
-  };
-}
-
-export function createCommentQuoteFromContainer(
-  container: AnchorContainer,
-  startOffset: number,
-  endOffset: number,
-) {
-  const normalizedStart = clamp(startOffset, 0, container.text.length);
-  const normalizedEnd = clamp(endOffset, normalizedStart, container.text.length);
-
-  return container.text.slice(normalizedStart, normalizedEnd);
-}
-
-// --- Resolution ---
+// Exact-quote candidates are already strong signals (the quoted text appears
+// verbatim), so context only acts as a tiebreaker. Repair-mode candidates
+// have no exact quote to anchor them, so matching prefix/suffix carries more
+// weight and length similarity / shared character overlap break ties between
+// fuzzy locations.
+const EXACT_CONTEXT_MATCH_SCORE = 48;
+const CONTEXT_REPAIR_MATCH_SCORE = 64;
+const MAX_LENGTH_SIMILARITY_SCORE = 32;
 
 type AnchorMatchCandidate = {
   container: AnchorContainer;
@@ -45,14 +50,7 @@ type AnchorMatchCandidate = {
   startOffset: number;
 };
 
-// Scoring weights for comment resolution. Exact-quote candidates are already
-// strong signals (the quoted text appears verbatim), so context only acts as a
-// tiebreaker. Repair-mode candidates have no exact quote to anchor them, so
-// matching prefix/suffix carries more weight and length similarity / shared
-// character overlap break ties between fuzzy locations.
-const EXACT_CONTEXT_MATCH_SCORE = 48;
-const CONTEXT_REPAIR_MATCH_SCORE = 64;
-const MAX_LENGTH_SIMILARITY_SCORE = 32;
+// --- Public API ---
 
 export function resolveCommentThread(thread: CommentThread, snapshot: Document): CommentResolution {
   const anchorKind = thread.anchor.kind ?? DEFAULT_ANCHOR_KIND;
@@ -78,6 +76,8 @@ export function resolveCommentThread(thread: CommentThread, snapshot: Document):
   };
 }
 
+// --- Candidate collection ---
+
 function collectExactQuoteCandidates(thread: CommentThread, containers: AnchorContainer[]) {
   const candidates: AnchorMatchCandidate[] = [];
   const quote = thread.quote;
@@ -87,22 +87,13 @@ function collectExactQuoteCandidates(thread: CommentThread, containers: AnchorCo
   }
 
   for (const container of containers) {
-    let searchIndex = 0;
-
-    while (searchIndex <= container.text.length) {
-      const matchIndex = container.text.indexOf(quote, searchIndex);
-
-      if (matchIndex === -1) {
-        break;
-      }
-
+    for (const startOffset of findOccurrences(container.text, quote)) {
       candidates.push({
         container,
-        endOffset: matchIndex + quote.length,
-        score: scoreExactCandidate(thread, container, matchIndex),
-        startOffset: matchIndex,
+        endOffset: startOffset + quote.length,
+        score: scoreExactCandidate(thread, container, startOffset),
+        startOffset,
       });
-      searchIndex = matchIndex + Math.max(1, quote.length);
     }
   }
 
@@ -130,44 +121,32 @@ function collectContainerContextCandidates(thread: CommentThread, container: Anc
   const prefix = thread.anchor.prefix ?? "";
   const suffix = thread.anchor.suffix ?? "";
 
+  // Prefix and suffix both present: enumerate every prefix→suffix range and
+  // score each as a candidate. The original-quote length informs the score so
+  // ranges close to the prior length rank higher.
   if (prefix.length > 0 && suffix.length > 0) {
-    let prefixSearchIndex = 0;
-
-    while (prefixSearchIndex <= text.length) {
-      const prefixIndex = text.indexOf(prefix, prefixSearchIndex);
-
-      if (prefixIndex === -1) {
-        break;
-      }
-
-      const startOffset = prefixIndex + prefix.length;
-      const suffixIndex = text.indexOf(suffix, startOffset);
-
-      if (suffixIndex !== -1 && suffixIndex >= startOffset) {
-        candidates.push({
+    for (const range of findContextRanges(text, prefix, suffix)) {
+      candidates.push({
+        container,
+        endOffset: range.endOffset,
+        score: scoreContextCandidate(
+          thread,
           container,
-          endOffset: suffixIndex,
-          score: scoreContextCandidate(thread, container, startOffset, suffixIndex, originalLength),
-          startOffset,
-        });
-      }
-
-      prefixSearchIndex = prefixIndex + Math.max(1, prefix.length);
+          range.startOffset,
+          range.endOffset,
+          originalLength,
+        ),
+        startOffset: range.startOffset,
+      });
     }
 
     return candidates;
   }
 
+  // Only one side of context survives: anchor at every occurrence and estimate
+  // the missing edge using the prior quote length.
   if (prefix.length > 0) {
-    let prefixSearchIndex = 0;
-
-    while (prefixSearchIndex <= text.length) {
-      const prefixIndex = text.indexOf(prefix, prefixSearchIndex);
-
-      if (prefixIndex === -1) {
-        break;
-      }
-
+    for (const prefixIndex of findOccurrences(text, prefix)) {
       const startOffset = prefixIndex + prefix.length;
       const endOffset = clamp(startOffset + originalLength, startOffset, text.length);
 
@@ -177,22 +156,13 @@ function collectContainerContextCandidates(thread: CommentThread, container: Anc
         score: scoreContextCandidate(thread, container, startOffset, endOffset, originalLength),
         startOffset,
       });
-      prefixSearchIndex = prefixIndex + Math.max(1, prefix.length);
     }
 
     return candidates;
   }
 
   if (suffix.length > 0) {
-    let suffixSearchIndex = 0;
-
-    while (suffixSearchIndex <= text.length) {
-      const suffixIndex = text.indexOf(suffix, suffixSearchIndex);
-
-      if (suffixIndex === -1) {
-        break;
-      }
-
+    for (const suffixIndex of findOccurrences(text, suffix)) {
       const endOffset = suffixIndex;
       const startOffset = clamp(endOffset - originalLength, 0, endOffset);
 
@@ -202,12 +172,13 @@ function collectContainerContextCandidates(thread: CommentThread, container: Anc
         score: scoreContextCandidate(thread, container, startOffset, endOffset, originalLength),
         startOffset,
       });
-      suffixSearchIndex = suffixIndex + Math.max(1, suffix.length);
     }
   }
 
   return candidates;
 }
+
+// --- Resolution finalization ---
 
 function finalizeResolution(
   thread: CommentThread,
@@ -232,12 +203,12 @@ function finalizeResolution(
     };
   }
 
-  const repairedAnchor = createCommentAnchorFromContainer(
+  const repairedAnchor = createAnchorFromContainer(
     first.container,
     first.startOffset,
     first.endOffset,
   );
-  const repairedQuote = createCommentQuoteFromContainer(
+  const repairedQuote = extractQuoteFromContainer(
     first.container,
     first.startOffset,
     first.endOffset,
@@ -273,6 +244,8 @@ function toAnchorMatch(
     startOffset,
   };
 }
+
+// --- Scoring ---
 
 function scoreExactCandidate(
   thread: CommentThread,
@@ -326,22 +299,8 @@ function scoreContextCandidate(
   return score;
 }
 
-function prefixMatchesAt(text: string, prefix: string | undefined, position: number) {
-  if (!prefix) {
-    return false;
-  }
-
-  return text.slice(Math.max(0, position - prefix.length), position) === prefix;
-}
-
-function suffixMatchesAt(text: string, suffix: string | undefined, position: number) {
-  if (!suffix) {
-    return false;
-  }
-
-  return text.slice(position, position + suffix.length) === suffix;
-}
-
+// Count the leading characters two strings share. Comment-specific
+// similarity metric for tiebreaking fuzzy match candidates.
 function sharedCharacterPrefixLength(left: string, right: string) {
   let length = 0;
 
@@ -352,6 +311,8 @@ function sharedCharacterPrefixLength(left: string, right: string) {
   return length;
 }
 
+// Count the trailing characters two strings share. See
+// `sharedCharacterPrefixLength`.
 function sharedCharacterSuffixLength(left: string, right: string) {
   let length = 0;
 
@@ -364,8 +325,4 @@ function sharedCharacterSuffixLength(left: string, right: string) {
   }
 
   return length;
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
 }

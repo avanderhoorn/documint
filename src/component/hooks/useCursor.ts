@@ -2,11 +2,11 @@ import {
   measureVisualCaretTarget,
   normalizeSelection,
   resolveTargetAtSelection,
+  type EditorCommentState,
   type EditorState,
   type EditorViewportState,
   type NormalizedEditorSelection,
 } from "@/editor";
-import type { EditorCommentState } from "@/editor/annotations";
 import type { LazyRefHandle } from "./useLazyRef";
 import { useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { resolveContextualLeaf, type ContextualLeaf } from "../leaves/lib/leaf-target";

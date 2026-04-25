@@ -1,6 +1,6 @@
 // Canonical semantic document construction plus small format-agnostic helpers
 // shared across markdown, editor, comments, and tests.
-import type { CommentThread } from "@/comments";
+import type { CommentThread } from "./comments";
 import { rebuildTableBlock, rebuildTextBlock } from "./build";
 import {
   type Block,

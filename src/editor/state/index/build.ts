@@ -1,14 +1,14 @@
 // DocumentIndex construction: builds the flattened runtime representation
 // (roots, blocks, regions, indexes) from a Document.
-import { resolveCommentThread } from "@/comments";
 import {
   createDocument,
   createParagraphTextBlock,
+  resolveCommentThread,
   type Block,
   type Document,
   type Inline,
 } from "@/document";
-import { getCommentState } from "../../annotations";
+import { getCommentState } from "../../anchors";
 import type {
   EditorBlock,
   EditorInline,

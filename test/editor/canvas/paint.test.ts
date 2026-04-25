@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { Block } from "@/document";
-import type { EditorPresence } from "@/editor/annotations";
+import type { EditorPresence } from "@/editor/anchors";
 import { createDocumentLayout } from "@/editor/layout";
 import { createEditorState, setSelection } from "@/editor/state";
 import { paintCanvasCaretOverlay, paintCanvasEditorSurface } from "@/editor/canvas/paint";

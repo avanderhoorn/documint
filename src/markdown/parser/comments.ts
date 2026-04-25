@@ -3,8 +3,12 @@
  * including the JSON array envelope that wraps persisted comment threads.
  */
 
-import { parseCommentThread, type CommentThread } from "@/comments";
-import type { Block, DirectiveBlock } from "@/document";
+import {
+  parseCommentThread,
+  type Block,
+  type CommentThread,
+  type DirectiveBlock,
+} from "@/document";
 import { commentDirectiveName } from "../shared";
 
 export function extractCommentDirective(blocks: Block[]) {

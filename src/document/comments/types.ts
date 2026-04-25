@@ -1,4 +1,4 @@
-import type { Anchor, AnchorResolution } from "@/document";
+import type { Anchor, AnchorResolution } from "../anchors";
 
 export type CommentThread = {
   quote: string;

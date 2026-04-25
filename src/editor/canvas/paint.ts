@@ -3,7 +3,7 @@
 // visual policy around highlights, caret alignment, and inline chrome.
 
 import type { Block, Mark } from "@/document";
-import type { EditorCommentRange, EditorPresence } from "../annotations";
+import type { EditorCommentRange, EditorPresence } from "../anchors";
 import type { EditorState } from "../state";
 import type { DocumentResources } from "@/types";
 import {

@@ -1,8 +1,4 @@
-export {
-  createCommentAnchorFromContainer,
-  createCommentQuoteFromContainer,
-  resolveCommentThread,
-} from "./anchors";
+export { resolveCommentThread } from "./anchors";
 
 export { parseCommentThread } from "./serialization";
 

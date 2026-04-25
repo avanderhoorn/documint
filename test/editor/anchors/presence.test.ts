@@ -4,7 +4,7 @@ import {
   prepareViewport,
   resolvePresenceViewport,
 } from "@/editor";
-import { resolvePresenceCursors, type EditorPresence } from "@/editor/annotations";
+import { resolvePresenceCursors, type EditorPresence } from "@/editor/anchors";
 import { createEditorState } from "@/editor/state";
 import type { EditorRegion } from "@/editor/state";
 import { parseMarkdown } from "@/markdown";

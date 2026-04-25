@@ -5,10 +5,10 @@ import {
   createDocument,
   spliceCommentThreads,
   trimTrailingWhitespace,
+  type CommentThread,
   type Document,
 } from "@/document";
-import type { CommentThread } from "@/comments";
-import { getCommentState } from "../annotations";
+import { getCommentState } from "../anchors";
 import {
   addActiveBlockFlashAnimation,
   type EditorAnimation,

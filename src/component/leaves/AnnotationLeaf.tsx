@@ -1,5 +1,9 @@
-import { getCommentThreadUpdatedAt, isResolvedCommentThread, type CommentThread } from "@/comments";
-import type { Mark } from "@/document";
+import {
+  getCommentThreadUpdatedAt,
+  isResolvedCommentThread,
+  type CommentThread,
+  type Mark,
+} from "@/document";
 import {
   Bold,
   Check,

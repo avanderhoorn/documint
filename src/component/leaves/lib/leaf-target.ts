@@ -1,5 +1,4 @@
-import type { EditorHoverTarget } from "@/editor";
-import type { EditorCommentState } from "@/editor/annotations";
+import type { EditorCommentState, EditorHoverTarget } from "@/editor";
 
 export type ContextualLeaf =
   | {

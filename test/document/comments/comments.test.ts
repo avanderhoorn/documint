@@ -1,17 +1,17 @@
 import { expect, test } from "bun:test";
-import { listAnchorContainers } from "@/document";
-import { parseMarkdown } from "@/markdown";
 import {
-  createCommentAnchorFromContainer,
-  createCommentQuoteFromContainer,
+  createAnchorFromContainer,
   createCommentThread,
   deleteCommentFromThread,
   editCommentInThread,
+  extractQuoteFromContainer,
   getCommentThreadUpdatedAt,
   isResolvedCommentThread,
-  resolveCommentThread,
+  listAnchorContainers,
   markCommentThreadAsResolved,
-} from "@/comments";
+  resolveCommentThread,
+} from "@/document";
+import { parseMarkdown } from "@/markdown";
 
 test("creates durable anchors from semantic text containers", () => {
   const snapshot = parseMarkdown("# Title\n\nReview surface anchors survive.\n");
@@ -21,11 +21,11 @@ test("creates durable anchors from semantic text containers", () => {
     throw new Error("Expected review paragraph container");
   }
 
-  const anchor = createCommentAnchorFromContainer(container, 0, 14);
+  const anchor = createAnchorFromContainer(container, 0, 14);
 
   expect(anchor.kind).toBeUndefined();
   expect(anchor.prefix).toBeUndefined();
-  expect(createCommentQuoteFromContainer(container, 0, 14)).toBe("Review surface");
+  expect(extractQuoteFromContainer(container, 0, 14)).toBe("Review surface");
 });
 
 test("repairs anchors against changed semantic content", () => {
@@ -37,10 +37,10 @@ test("repairs anchors against changed semantic content", () => {
   }
 
   const thread = createCommentThread({
-    anchor: createCommentAnchorFromContainer(container, 15, 30),
+    anchor: createAnchorFromContainer(container, 15, 30),
     body: "Protect this anchored span.",
     createdAt: "2026-04-05T12:00:00.000Z",
-    quote: createCommentQuoteFromContainer(container, 15, 30),
+    quote: extractQuoteFromContainer(container, 15, 30),
   });
   const edited = parseMarkdown("Review surface editing keeps anchors survive markdown reloads.\n");
   const resolution = resolveCommentThread(thread, edited);
@@ -59,10 +59,10 @@ test("repairs anchors when the quoted text is edited in place", () => {
   }
 
   const thread = createCommentThread({
-    anchor: createCommentAnchorFromContainer(container, 0, 12),
+    anchor: createAnchorFromContainer(container, 0, 12),
     body: "Fix the typo, keep the comment.",
     createdAt: "2026-04-05T12:00:00.000Z",
-    quote: createCommentQuoteFromContainer(container, 0, 12),
+    quote: extractQuoteFromContainer(container, 0, 12),
   });
   const edited = parseMarkdown("Typoed person name appears here.\n");
   const resolution = resolveCommentThread(thread, edited);
@@ -82,10 +82,10 @@ test("keeps comments sticky when the containing block moves in the document", ()
   }
 
   const thread = createCommentThread({
-    anchor: createCommentAnchorFromContainer(container, 0, 20),
+    anchor: createAnchorFromContainer(container, 0, 20),
     body: "This should move with the paragraph.",
     createdAt: "2026-04-05T12:00:00.000Z",
-    quote: createCommentQuoteFromContainer(container, 0, 20),
+    quote: extractQuoteFromContainer(container, 0, 20),
   });
   const moved = parseMarkdown("Omega tail.\n\nUnique quoted phrase lives here.\n\nAlpha intro.\n");
   const resolution = resolveCommentThread(thread, moved);
@@ -104,10 +104,10 @@ test("keeps comments sticky when a paragraph becomes a heading", () => {
   }
 
   const thread = createCommentThread({
-    anchor: createCommentAnchorFromContainer(container, 0, 12),
+    anchor: createAnchorFromContainer(container, 0, 12),
     body: "This should survive heading promotion.",
     createdAt: "2026-04-05T12:00:00.000Z",
-    quote: createCommentQuoteFromContainer(container, 0, 12),
+    quote: extractQuoteFromContainer(container, 0, 12),
   });
   const promoted = parseMarkdown("# Promote this line.\n");
   const resolution = resolveCommentThread(thread, promoted);
@@ -173,10 +173,10 @@ test("serializes thread payloads deterministically and tracks status transitions
   }
 
   const thread = createCommentThread({
-    anchor: createCommentAnchorFromContainer(container, 0, 6),
+    anchor: createAnchorFromContainer(container, 0, 6),
     body: "Initial note.",
     createdAt: "2026-04-05T12:00:00.000Z",
-    quote: createCommentQuoteFromContainer(container, 0, 6),
+    quote: extractQuoteFromContainer(container, 0, 6),
   });
   const resolved = markCommentThreadAsResolved(thread, true, "2026-04-05T13:00:00.000Z");
 
@@ -194,10 +194,10 @@ test("edits and deletes thread comments without moving thread ownership into the
   }
 
   const thread = createCommentThread({
-    anchor: createCommentAnchorFromContainer(container, 0, 6),
+    anchor: createAnchorFromContainer(container, 0, 6),
     body: "Initial note.",
     createdAt: "2026-04-05T12:00:00.000Z",
-    quote: createCommentQuoteFromContainer(container, 0, 6),
+    quote: extractQuoteFromContainer(container, 0, 6),
   });
   const replyThread = appendReply(thread);
   const editedThread = editCommentInThread(
