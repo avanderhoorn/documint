@@ -5,6 +5,7 @@ import {
   type EditorState,
   type EditorViewportState,
 } from "@/editor";
+import { measureLifecycle } from "@/lifecycle";
 import type { DocumentResources, EditorTheme } from "@/types";
 import {
   type CSSProperties,
@@ -141,17 +142,32 @@ export function useViewport({
     const currentState = editorStateRef.current ?? editorState;
     const viewport = viewportMetricsRef.current;
 
-    return prepareViewport(
-      currentState,
-      {
-        height: viewport.height,
-        paddingX: theme.paddingX,
-        paddingY: theme.paddingY,
-        top: viewport.top,
-        width: layoutWidth,
+    return measureLifecycle(
+      () =>
+        prepareViewport(
+          currentState,
+          {
+            height: viewport.height,
+            paddingX: theme.paddingX,
+            paddingY: theme.paddingY,
+            top: viewport.top,
+            width: layoutWidth,
+          },
+          renderCacheRef.current,
+          renderResources,
+        ),
+      { type: "viewport" },
+      (result) => {
+        const laidOutBlockIds = new Set<string>();
+        for (const regionId of result.regionBounds.keys()) {
+          const region = currentState.documentIndex.regionIndex.get(regionId);
+          if (region) laidOutBlockIds.add(region.blockId);
+        }
+        return {
+          laidOut: laidOutBlockIds.size,
+          total: result.blockMap.size,
+        };
       },
-      renderCacheRef.current,
-      renderResources,
     );
   });
 

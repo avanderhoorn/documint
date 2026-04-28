@@ -29,3 +29,5 @@ export type {
 } from "./document";
 
 export type { CommentThread, Comment } from "./document";
+
+export { subscribeLifecycle, type LifecycleEvent } from "./lifecycle";

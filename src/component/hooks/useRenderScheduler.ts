@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent, useRef, type RefObject } from "react";
 import { hasRunningAnimations, type EditorState } from "@/editor";
+import { withRenderTier } from "../lib/render-tier";
 
 type UseRenderSchedulerOptions = {
   /**
@@ -81,7 +82,7 @@ export function useRenderScheduler({
 
   const scheduleFullRender = useEffectEvent(() => {
     if (typeof window === "undefined") {
-      renderViewport();
+      withRenderTier("viewport", () => renderViewport());
       return;
     }
     pendingFullRenderRef.current = true;
@@ -90,8 +91,10 @@ export function useRenderScheduler({
 
   const scheduleFullPaint = useEffectEvent(() => {
     if (typeof window === "undefined") {
-      renderContent();
-      renderOverlay();
+      withRenderTier("full-paint", () => {
+        renderContent();
+        renderOverlay();
+      });
       return;
     }
     pendingFullPaintRef.current = true;
@@ -100,7 +103,7 @@ export function useRenderScheduler({
 
   const scheduleContentPaint = useEffectEvent(() => {
     if (typeof window === "undefined") {
-      renderContent();
+      withRenderTier("content", () => renderContent());
       return;
     }
     pendingContentPaintRef.current = true;
@@ -109,7 +112,7 @@ export function useRenderScheduler({
 
   const scheduleOverlayPaint = useEffectEvent(() => {
     if (typeof window === "undefined") {
-      renderOverlay();
+      withRenderTier("overlay", () => renderOverlay());
       return;
     }
     pendingOverlayPaintRef.current = true;
@@ -146,24 +149,26 @@ export function useRenderScheduler({
     pendingOverlayPaintRef.current = false;
 
     if (shouldFullRender) {
-      renderViewport();
+      withRenderTier("viewport", () => renderViewport());
       scheduleAnimationContinuation();
       return;
     }
 
     if (shouldFullPaint) {
-      renderContent();
-      renderOverlay();
+      withRenderTier("full-paint", () => {
+        renderContent();
+        renderOverlay();
+      });
       scheduleAnimationContinuation();
       return;
     }
 
     if (shouldContentPaint) {
-      renderContent();
+      withRenderTier("content", () => renderContent());
       scheduleAnimationContinuation();
     }
     if (shouldOverlayPaint) {
-      renderOverlay();
+      withRenderTier("overlay", () => renderOverlay());
     }
   });
 

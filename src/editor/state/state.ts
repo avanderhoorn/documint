@@ -8,6 +8,7 @@ import {
   type CommentThread,
   type Document,
 } from "@/document";
+import { emitLifecycle, measureLifecycle } from "@/lifecycle";
 import { getCommentState } from "../anchors";
 import {
   addActiveBlockFlashAnimation,
@@ -96,18 +97,51 @@ export function dispatch(state: EditorState, action: EditorStateAction | null) {
       return setSelection(state, action.selection);
 
     default: {
-      const result = applyAction(state.documentIndex, action);
+      // Inline the mutation pipeline so we can:
+      //   - skip emission entirely when the action no-ops (`applyAction`
+      //     returns `null`), matching the null-skip contract used by
+      //     `instrument-commands.wrap`; and
+      //   - bypass `performance.now()` and event-payload computation
+      //     entirely in production via the NODE_ENV gate.
+      const apply = (): EditorState | null => {
+        const result = applyAction(state.documentIndex, action);
 
-      if (!result) {
-        return null;
+        if (!result) {
+          return null;
+        }
+
+        const nextState = pushHistory(state, result.document, result.documentIndex ?? null);
+        const resolvedSelection =
+          resolveSelectionTarget(nextState.documentIndex, result.selection) ?? state.selection;
+        const blockChanged = didActiveBlockChange(state, nextState, resolvedSelection);
+
+        return setSelection(nextState, resolvedSelection, blockChanged);
+      };
+
+      if (process.env.NODE_ENV === "production") {
+        return apply();
       }
 
-      const nextState = pushHistory(state, result.document, result.documentIndex ?? null);
-      const resolvedSelection =
-        resolveSelectionTarget(nextState.documentIndex, result.selection) ?? state.selection;
-      const blockChanged = didActiveBlockChange(state, nextState, resolvedSelection);
+      const startedAt = performance.now();
+      const finalState = apply();
 
-      return setSelection(nextState, resolvedSelection, blockChanged);
+      if (finalState !== null) {
+        // Structural deltas are O(1) array-length comparisons. They give
+        // the diagnostics panel attribution information ("this transaction
+        // grew the document by N regions / M blocks") without requiring a
+        // serialize-side event to derive size changes.
+        emitLifecycle({
+          type: "transaction",
+          name: action.kind,
+          durationMs: performance.now() - startedAt,
+          blockCountDelta:
+            finalState.documentIndex.blocks.length - state.documentIndex.blocks.length,
+          regionCountDelta:
+            finalState.documentIndex.regions.length - state.documentIndex.regions.length,
+        });
+      }
+
+      return finalState;
     }
   }
 }
@@ -227,19 +261,39 @@ export function spliceEditorCommentThreads(
   count: number,
   threads: CommentThread[],
 ): EditorState {
-  const document = spliceCommentThreads(state.documentIndex.document, index, count, threads);
-  const documentIndex: DocumentIndex = replaceIndexedDocument(state.documentIndex, document);
+  // Comment thread mutations don't go through `dispatch()` (they take their
+  // own pre-built `CommentThread[]` rather than an `EditorAction`), so they'd
+  // otherwise bypass the `transaction` lifecycle event. Emit one here so the
+  // diagnostics surface counts comment writes alongside text edits — and so
+  // upstream's @mentions paths (which flow through `replyToCommentThread` /
+  // `editComment`) are observable.
+  return measureLifecycle(
+    () => {
+      const document = spliceCommentThreads(state.documentIndex.document, index, count, threads);
+      const documentIndex: DocumentIndex = replaceIndexedDocument(state.documentIndex, document);
 
-  return {
-    animations: pruneEditorAnimations(state.animations, getEditorAnimationTime()),
-    documentIndex,
-    future: [],
-    history: [
-      ...state.history,
-      { document: state.documentIndex.document, selection: state.selection },
-    ],
-    selection: state.selection,
-  };
+      return {
+        animations: pruneEditorAnimations(state.animations, getEditorAnimationTime()),
+        documentIndex,
+        future: [],
+        history: [
+          ...state.history,
+          { document: state.documentIndex.document, selection: state.selection },
+        ],
+        selection: state.selection,
+      };
+    },
+    {
+      type: "transaction",
+      name: "spliceCommentThreads",
+      // Comment splices don't change blocks or regions — comments live on
+      // the document, not in the region/block index. Reported as 0 to
+      // satisfy the typed shape and so the panel doesn't have to special-
+      // case missing fields.
+      blockCountDelta: 0,
+      regionCountDelta: 0,
+    },
+  );
 }
 
 /* Internal helpers */

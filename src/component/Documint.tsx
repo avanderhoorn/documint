@@ -47,6 +47,7 @@ import {
   updateLink,
   type EditorState,
 } from "@/editor";
+import { emitLifecycle, measureLifecycle } from "@/lifecycle";
 import type { DocumentPresence, DocumentUser, EditorTheme } from "@/types";
 import { PresenceOverlay } from "./overlays/PresenceOverlay";
 import { parseMarkdown, serializeMarkdown } from "@/markdown";
@@ -68,9 +69,11 @@ import { useTheme } from "./hooks/useTheme";
 import { useViewport } from "./hooks/useViewport";
 import { areStatesEqual, prepareCanvasLayer } from "./lib/canvas";
 import { emitDiagnostic } from "./lib/diagnostics";
+import { instrumentedCommands } from "./lib/instrument-commands";
 import { type EditorKeybinding } from "./lib/keybindings";
 import { extractMentionedUserIds } from "./lib/mentions";
 import { joinUsersAndPresence } from "./lib/presence";
+import { readRenderTier } from "./lib/render-tier";
 import { normalizeSelectionAbsolutePositions } from "./lib/selection";
 import { reconcileExternalContentChange } from "./lib/reconciliation";
 import { DocumintSsr } from "./Ssr";
@@ -165,7 +168,18 @@ export function Documint({
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const editorStateRef = useRef<EditorState | null>(null);
-  const lastEmittedContentRef = useRef(content);
+  // Tracks the markdown string we last consumed (initial mount, host echo of
+  // our own emission, or external content swap). Drives the reconciliation
+  // effect AND the echo-back fast paths in the parse/serialize useMemos.
+  const lastEmittedContentRef = useRef<string>(content);
+  // Flips true the first time we emit a `serialize` event so the initial
+  // emission can report `deltaChars: 0` instead of canonicalization noise.
+  const hasEmittedSerializeRef = useRef(false);
+  // Strict-mode and aborted concurrent renders re-invoke our useMemo
+  // calculators with the same `content`. These refs make `parse`/`serialize`
+  // emissions idempotent per content value across re-runs.
+  const lastEmittedParseContentRef = useRef<string | null>(null);
+  const lastEmittedSerializeContentRef = useRef<string | null>(null);
   const canonicalContentRef = useRef("");
   const componentStateRef = useRef(defaultDocumintState);
 
@@ -173,8 +187,60 @@ export function Documint({
   const { theme: preferredTheme, themeStyles } = useTheme(theme);
   const [componentState, setComponentState] = useState(defaultDocumintState);
 
-  const contentDocument = useMemo(() => parseMarkdown(content), [content]);
-  const canonicalContent = useMemo(() => serializeMarkdown(contentDocument), [contentDocument]);
+  const contentDocument = useMemo(() => {
+    // Echo-back from controlled host: the editor just emitted `nextContent`
+    // via `onContentChange`, the host re-set `content` to that same value,
+    // and we now re-derive — but the editor's current document already
+    // represents that exact content. Reuse it instead of re-parsing.
+    if (content === lastEmittedContentRef.current && editorStateRef.current) {
+      return getDocument(editorStateRef.current);
+    }
+    // Re-invocation guard for the SAME content (strict-mode purity check
+    // re-runs the calculator; concurrent renders aborted mid-flight may
+    // re-render with the same prop). Skip emission but still produce a
+    // parsed document — React discarded the previous calculator's return
+    // value, so we can't reuse it.
+    if (lastEmittedParseContentRef.current === content) {
+      return parseMarkdown(content);
+    }
+    // Cache miss = external content change. Emit the intent before the
+    // parse so the lifecycle stream preserves causal order
+    // (intent → parse → serialize). Skipped on initial mount, where the
+    // parse is setup work, not a user-driven swap.
+    if (editorStateRef.current !== null) {
+      emitLifecycle({ type: "intent", name: "externalContentChange" });
+    }
+    lastEmittedParseContentRef.current = content;
+    return measureLifecycle(() => parseMarkdown(content), { type: "parse" });
+  }, [content]);
+  const canonicalContent = useMemo(() => {
+    // Same echo-back guard. Use the "have we ever emitted serialize" flag
+    // (rather than a truthiness check on the cached string) so empty
+    // documents — where the cache is `""` — still hit the fast-path.
+    if (content === lastEmittedContentRef.current && hasEmittedSerializeRef.current) {
+      return canonicalContentRef.current;
+    }
+    // Re-invocation guard (same rationale as the parse useMemo above).
+    if (lastEmittedSerializeContentRef.current === content) {
+      return serializeMarkdown(contentDocument);
+    }
+    const previousLength = hasEmittedSerializeRef.current
+      ? lastEmittedContentRef.current.length
+      : null;
+    lastEmittedSerializeContentRef.current = content;
+    const result = measureLifecycle(
+      () => serializeMarkdown(contentDocument),
+      { type: "serialize" },
+      (r) => ({
+        // First emission has no baseline — report delta=0 instead of
+        // `r.length - 0`, which would otherwise look like the host typed
+        // the entire document.
+        deltaChars: previousLength === null ? 0 : r.length - previousLength,
+      }),
+    );
+    hasEmittedSerializeRef.current = true;
+    return result;
+  }, [content, contentDocument]);
 
   const [editorState, setEditorState] = useState(() => createEditorState(contentDocument));
   const renderResources = useDocumentImages(editorState.documentIndex.document);
@@ -272,7 +338,8 @@ export function Documint({
     }
   });
 
-  const applyNextState = useEffectEvent((nextState: EditorState | null) => {
+  const applyNextState = useEffectEvent((nextState: EditorState | null, intent?: string) => {
+    if (intent) emitLifecycle({ type: "intent", name: intent });
     if (!nextState) {
       return;
     }
@@ -298,7 +365,19 @@ export function Documint({
     }
 
     const nextDocument = getDocument(nextState);
-    const nextContent = serializeMarkdown(nextDocument);
+    const previousLength = hasEmittedSerializeRef.current
+      ? lastEmittedContentRef.current.length
+      : null;
+    const nextContent = measureLifecycle(
+      () => serializeMarkdown(nextDocument),
+      { type: "serialize" },
+      (result) => ({
+        // Match `canonicalContent` semantics: first emission has no
+        // baseline → delta=0 instead of full document length.
+        deltaChars: previousLength === null ? 0 : result.length - previousLength,
+      }),
+    );
+    hasEmittedSerializeRef.current = true;
 
     canonicalContentRef.current = nextContent;
     lastEmittedContentRef.current = nextContent;
@@ -386,19 +465,30 @@ export function Documint({
 
     const { context, devicePixelRatio, height, width } = preparedLayer;
 
-    paintContent(editorState, viewportState, context, {
-      activeBlockId: selectionContext.block?.blockId ?? null,
-      activeRegionId: editorState.selection.focus.regionId,
-      activeThreadIndex: hoveredCommentThreadIndex ?? activeCommentThreadIndex,
-      devicePixelRatio,
-      height,
-      liveCommentRanges: commentState.liveRanges,
-      normalizedSelection: normalizedSel,
-      now: performance.now(),
-      resources: renderResources,
-      theme: preferredTheme,
-      width,
-    });
+    measureLifecycle(
+      () =>
+        paintContent(editorState, viewportState, context, {
+          activeBlockId: selectionContext.block?.blockId ?? null,
+          activeRegionId: editorState.selection.focus.regionId,
+          activeThreadIndex: hoveredCommentThreadIndex ?? activeCommentThreadIndex,
+          devicePixelRatio,
+          height,
+          liveCommentRanges: commentState.liveRanges,
+          normalizedSelection: normalizedSel,
+          now: performance.now(),
+          resources: renderResources,
+          theme: preferredTheme,
+          width,
+        }),
+      {
+        type: "paint",
+        tier: readRenderTier() === "viewport" ? "viewport" : "content",
+        // Number of region tiles in the prepared viewport. Same denominator
+        // as `viewport.laidOut`, so a panel can correlate "we painted N
+        // tiles in M ms" against "we laid out N tiles in K ms".
+        tilesPainted: viewportState.regionBounds.size,
+      },
+    );
   });
 
   const renderOverlay = useEffectEvent((viewportState = preparedViewport.peek()) => {
@@ -418,18 +508,22 @@ export function Documint({
 
     const { context, devicePixelRatio, height, width } = preparedLayer;
 
-    paintOverlay(editorState, viewportState, context, {
-      devicePixelRatio,
-      height,
-      normalizedSelection: normalizedSel,
-      presence: presenceController.presence,
-      showCaret:
-        normalizedSel.start.regionId !== normalizedSel.end.regionId ||
-        normalizedSel.start.offset !== normalizedSel.end.offset ||
-        cursor.isVisible(),
-      theme: preferredTheme,
-      width,
-    });
+    measureLifecycle(
+      () =>
+        paintOverlay(editorState, viewportState, context, {
+          devicePixelRatio,
+          height,
+          normalizedSelection: normalizedSel,
+          presence: presenceController.presence,
+          showCaret:
+            normalizedSel.start.regionId !== normalizedSel.end.regionId ||
+            normalizedSel.start.offset !== normalizedSel.end.offset ||
+            cursor.isVisible(),
+          theme: preferredTheme,
+          width,
+        }),
+      { type: "overlay" },
+    );
   });
 
   const renderViewport = useEffectEvent(() => {
@@ -485,6 +579,7 @@ export function Documint({
     applyNextState,
     autoScrollDuringDrag,
     canvasRef: contentCanvasRef,
+    commands: instrumentedCommands,
     commentState,
     editorStateRef,
     editorViewportState: preparedViewport,
@@ -684,10 +779,10 @@ export function Documint({
         return (
           <InsertionLeaf
             onInsert={(text) => {
-              applyNextState(insertText(readCurrentState(), text));
+              applyNextState(insertText(readCurrentState(), text), "insertText");
             }}
             onInsertTable={(columnCount) => {
-              applyNextState(insertTable(readCurrentState(), columnCount));
+              applyNextState(insertTable(readCurrentState(), columnCount), "insertTable");
             }}
           />
         );
@@ -697,19 +792,19 @@ export function Documint({
             canDeleteColumn={visibleLeaf.columnCount > 1}
             canDeleteRow={visibleLeaf.rowCount > 1}
             onDeleteColumn={() => {
-              applyNextState(deleteTableColumn(readCurrentState()));
+              applyNextState(deleteTableColumn(readCurrentState()), "deleteTableColumn");
             }}
             onDeleteRow={() => {
-              applyNextState(deleteTableRow(readCurrentState()));
+              applyNextState(deleteTableRow(readCurrentState()), "deleteTableRow");
             }}
             onDeleteTable={() => {
-              applyNextState(deleteTable(readCurrentState()));
+              applyNextState(deleteTable(readCurrentState()), "deleteTable");
             }}
             onInsertColumn={(direction) => {
-              applyNextState(insertTableColumn(readCurrentState(), direction));
+              applyNextState(insertTableColumn(readCurrentState(), direction), "insertTableColumn");
             }}
             onInsertRow={(direction) => {
-              applyNextState(insertTableRow(readCurrentState(), direction));
+              applyNextState(insertTableRow(readCurrentState(), direction), "insertTableRow");
             }}
           />
         );
@@ -726,7 +821,7 @@ export function Documint({
               );
 
               if (stateUpdate) {
-                applyNextState(stateUpdate);
+                applyNextState(stateUpdate, "removeLink");
               }
             }}
             onSave={(url) => {
@@ -739,7 +834,7 @@ export function Documint({
               );
 
               if (stateUpdate) {
-                applyNextState(stateUpdate);
+                applyNextState(stateUpdate, "updateLink");
               }
             }}
             title={visibleLeaf.title}
@@ -767,21 +862,21 @@ export function Documint({
                 return;
               }
 
-              applyNextState(stateUpdate);
+              applyNextState(stateUpdate, "createCommentThread");
               selection.promoteLeafToThread(threadIndex, true);
               emitCommentAdded(threadIndex);
             }}
             onToggleBold={() => {
-              applyNextState(toggleBold(readCurrentState()));
+              applyNextState(toggleBold(readCurrentState()), "toggleBold");
             }}
             onToggleItalic={() => {
-              applyNextState(toggleItalic(readCurrentState()));
+              applyNextState(toggleItalic(readCurrentState()), "toggleItalic");
             }}
             onToggleStrikethrough={() => {
-              applyNextState(toggleStrikethrough(readCurrentState()));
+              applyNextState(toggleStrikethrough(readCurrentState()), "toggleStrikethrough");
             }}
             onToggleUnderline={() => {
-              applyNextState(toggleUnderline(readCurrentState()));
+              applyNextState(toggleUnderline(readCurrentState()), "toggleUnderline");
             }}
           />
         );
@@ -800,7 +895,7 @@ export function Documint({
               const comment = thread?.comments[commentIndex];
               const stateUpdate = deleteComment(previousState, threadIndex, commentIndex);
               if (!stateUpdate) return;
-              applyNextState(stateUpdate);
+              applyNextState(stateUpdate, "deleteComment");
               if (thread && comment) {
                 emitCommentDeleted(threadIndex, thread, comment);
               }
@@ -811,7 +906,7 @@ export function Documint({
               const thread = getDocument(previousState).comments[threadIndex];
               const stateUpdate = deleteCommentThread(previousState, threadIndex);
               if (!stateUpdate) return;
-              applyNextState(stateUpdate);
+              applyNextState(stateUpdate, "deleteCommentThread");
               if (thread) {
                 for (const comment of thread.comments) {
                   emitCommentDeleted(threadIndex, thread, comment);
@@ -823,18 +918,27 @@ export function Documint({
               const previousState = readCurrentState();
               const previousBody =
                 getDocument(previousState).comments[threadIndex]?.comments[commentIndex]?.body;
-              const stateUpdate = editComment(previousState, threadIndex, commentIndex, body);
+              const stateUpdate = editComment(
+                previousState,
+                threadIndex,
+                commentIndex,
+                body,
+              );
               if (!stateUpdate) return;
-              applyNextState(stateUpdate);
+              applyNextState(stateUpdate, "editComment");
               if (previousBody !== undefined) {
                 emitCommentEdited(threadIndex, commentIndex, previousBody);
               }
             }}
             onReply={(body) => {
               const { threadIndex } = annotationThreadLeaf;
-              const stateUpdate = replyToCommentThread(readCurrentState(), threadIndex, body);
+              const stateUpdate = replyToCommentThread(
+                readCurrentState(),
+                threadIndex,
+                body,
+              );
               if (!stateUpdate) return;
-              applyNextState(stateUpdate);
+              applyNextState(stateUpdate, "replyToCommentThread");
               emitCommentAdded(threadIndex);
             }}
             onToggleResolved={() => {
@@ -844,6 +948,7 @@ export function Documint({
                   annotationThreadLeaf.threadIndex,
                   !isResolvedCommentThread(annotationThreadLeaf.thread),
                 ),
+                "resolveCommentThread",
               );
             }}
             thread={annotationThreadLeaf.thread}

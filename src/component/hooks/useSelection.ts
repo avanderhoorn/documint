@@ -71,7 +71,7 @@ type UseSelectionOptions = {
   threads: EditorCommentState["threads"];
 
   // Host callbacks the hook invokes.
-  applyNextState: (nextState: EditorState) => void;
+  applyNextState: (nextState: EditorState, intent?: string) => void;
   autoScrollDuringDrag: (event: PointerEvent<HTMLElement>) => void;
   focusInput: FocusInput;
   onActivity: () => void;
@@ -245,6 +245,7 @@ export function useSelection({
         anchor: stationarySelectionPoint,
         focus: nextFocus,
       }),
+      "setSelection.handleDrag",
     );
   });
 
@@ -277,6 +278,7 @@ export function useSelection({
           anchor: stationarySelectionPoint,
           focus: draggedSelectionPoint,
         }),
+        "setSelection.handleDown",
       );
     },
     onPointerMove: (event) => {

@@ -1,65 +1,35 @@
 import { useEffect, type RefObject } from "react";
 
+import { DIAGNOSTIC_EVENT, type Diagnostic } from "@/lifecycle";
+
 /**
  * Lightweight runtime instrumentation for the editor.
  *
  * Diagnostic events are emitted by internal hooks (`useInput`,
  * `syncInputContext`, etc.) and rendered as a live log by the
- * playground's `DiagnosticsPopover` (which subscribes to the
- * {@link DIAGNOSTIC_EVENT} CustomEvent on `window`).
+ * playground's `DiagnosticsPopover` (which subscribes to {@link
+ * DIAGNOSTIC_EVENT} on `window`).
+ *
+ * The wire constant and {@link Diagnostic} envelope are owned by
+ * `src/lifecycle.ts` so the typed lifecycle stream and this raw bridge
+ * stream agree on a single bus contract.
  *
  * Diagnostics are an internal dev tool, not part of the library's public
- * API — `DIAGNOSTIC_EVENT` and {@link Diagnostic} are not re-exported
- * from `src/index.ts`. The playground reaches in directly via the `@/`
- * tsconfig path alias.
+ * API — neither this module nor lifecycle.ts is re-exported from
+ * `src/index.ts`.
  *
  * # Build-time gating
  *
- * Every diagnostic call site is gated by an inline
- * `process.env.NODE_ENV !== "production"` check. The expression is
- * substituted at build time so the bundler's minifier folds the gate
- * and dead-code-eliminates the entire branch (call, detail object
- * literal, every expression that builds it):
- *
- *   if (process.env.NODE_ENV !== "production") {
- *     emitDiagnostic("kind", { ...detail });
- *   }
- *   if (process.env.NODE_ENV !== "production") {
- *     useDiagnostics(inputRef);
- *   }
- *
- * Why the inline literal (rather than aliasing to a named constant): Bun's
- * minifier substitutes `process.env.NODE_ENV` at every textual occurrence,
- * but it doesn't reliably propagate a const-aliased value into use sites
- * inside exported function bodies — and our gates all live inside
- * exports. Inlining the literal at each gate site sidesteps that and
- * gives reliable DCE.
- *
- * In production the entire gated block is stripped — including the
- * `emitDiagnostic` call, the kind string, and the `detail` object
- * literal. The `emitDiagnostic` and `useDiagnostics` symbols themselves
- * tree-shake away because nothing references them.
- *
- * # Wiring
- *
- *   - The dev server (`bun run dev`) doesn't need extra setup; Bun's
- *     HTML bundler substitutes `process.env.NODE_ENV` with
- *     `"development"` automatically, so the gates evaluate to `true`.
- *   - `scripts/build.ts` passes `define: { "process.env.NODE_ENV":
- *     '"production"' }` to `Bun.build`, so every shipping build
- *     (publishable library, deployable playground demo) strips
- *     diagnostics.
+ * Every call site is gated by an inline
+ * `process.env.NODE_ENV !== "production"` check that the bundler folds at
+ * build time, dead-code-eliminating the entire branch. Inline the literal
+ * (rather than aliasing) so Bun's minifier reliably substitutes it inside
+ * exported function bodies.
  */
 
-/** CustomEvent type the diagnostics subsystem dispatches. */
-export const DIAGNOSTIC_EVENT = "documint:diagnostic";
-
-/** Wire-format payload of a diagnostic event. */
-export type Diagnostic = {
-  kind: string;
-  detail: Record<string, unknown>;
-  ts: number;
-};
+// Re-export the wire constants so callers in the component layer can
+// continue to import them from this module.
+export { DIAGNOSTIC_EVENT, type Diagnostic };
 
 /**
  * Emit a diagnostic event for any subscribed tool to render. Always wrap

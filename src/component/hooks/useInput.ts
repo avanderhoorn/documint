@@ -40,6 +40,7 @@ import {
   type EditorState,
   type EditorViewportState,
 } from "@/editor";
+import { emitLifecycle } from "@/lifecycle";
 import type { LazyRefHandle } from "./useLazyRef";
 import { emitDiagnostic, useDiagnostics } from "../lib/diagnostics";
 import { resolveEditorCommand, type EditorKeybinding } from "../lib/keybindings";
@@ -56,7 +57,7 @@ type UseInputOptions = {
   keybindings?: EditorKeybinding[];
 
   // Host callbacks the hook invokes.
-  applyNextState: (nextState: EditorState | null) => void;
+  applyNextState: (nextState: EditorState | null, intent?: string) => void;
   onActivity: () => void;
 };
 
@@ -180,7 +181,8 @@ export function useInput({
   const primingRef = useRef(false);
   const undoStackPrimedRef = useRef(false);
 
-  const applyStateChange = useEffectEvent((nextState: EditorState | null) => {
+  const applyStateChange = useEffectEvent((nextState: EditorState | null, intent?: string) => {
+    if (intent) emitLifecycle({ type: "intent", name: intent });
     if (!nextState) {
       return;
     }
@@ -305,7 +307,8 @@ export function useInput({
 
     for (const segment of segments) {
       if (segment.length === 0) continue;
-      const result = segment === "\n" ? insertLineBreak(nextState) : insertText(nextState, segment);
+      const result =
+        segment === "\n" ? insertLineBreak(nextState) : insertText(nextState, segment);
       if (!result) continue;
       nextState = result;
     }
@@ -410,7 +413,10 @@ export function useInput({
       // textarea selection extended over the range to replace.
       const charsToReplace = resolveReplacementLength(event.target);
       if (charsToReplace > 0) {
-        applyStateChange(applyReplacementText(state, charsToReplace, event.data));
+        applyStateChange(
+          applyReplacementText(state, charsToReplace, event.data),
+          "replaceSelection",
+        );
         return;
       }
 
@@ -420,13 +426,13 @@ export function useInput({
       if (overlap > 0) {
         const suffix = event.data.slice(overlap);
         if (suffix.length > 0) {
-          applyStateChange(applyNativeText(state, suffix));
+          applyStateChange(applyNativeText(state, suffix), "insertText");
         }
         return;
       }
 
       // Plain typing / IME commit / autocomplete.
-      applyStateChange(applyNativeText(state, event.data));
+      applyStateChange(applyNativeText(state, event.data), "insertText");
       return;
     }
 
@@ -437,25 +443,28 @@ export function useInput({
       if (!event.data) return;
       event.preventDefault();
       const charsToReplace = resolveReplacementLength(event.target);
-      applyStateChange(applyReplacementText(state, charsToReplace, event.data));
+      applyStateChange(
+        applyReplacementText(state, charsToReplace, event.data),
+        "replaceSelection",
+      );
       return;
     }
 
     if (isLineBreakInputType(event.inputType)) {
       event.preventDefault();
-      applyStateChange(insertLineBreak(state));
+      applyStateChange(insertLineBreak(state), "insertLineBreak");
       return;
     }
 
     if (deleteDirection === "backward") {
       event.preventDefault();
-      applyStateChange(deleteBackward(state));
+      applyStateChange(deleteBackward(state), "deleteBackward");
       return;
     }
 
     if (deleteDirection === "forward") {
       event.preventDefault();
-      applyStateChange(deleteForward(state));
+      applyStateChange(deleteForward(state), "deleteForward");
       return;
     }
 
@@ -466,14 +475,14 @@ export function useInput({
     // UIUndoManager pointer advances even when we preventDefault).
     if (event.inputType === "historyUndo") {
       event.preventDefault();
-      applyStateChange(undo(state));
+      applyStateChange(undo(state), "undo");
       rePrimeUndoStack();
       return;
     }
 
     if (event.inputType === "historyRedo") {
       event.preventDefault();
-      applyStateChange(redo(state));
+      applyStateChange(redo(state), "redo");
       rePrimeUndoStack();
       return;
     }
@@ -513,7 +522,7 @@ export function useInput({
       return;
     }
 
-    applyStateChange(applyNativeText(state, value));
+    applyStateChange(applyNativeText(state, value), "insertText");
   });
 
   const handleKeyDown = useEffectEvent(
@@ -560,7 +569,7 @@ export function useInput({
 
       event.preventDefault();
       event.clipboardData.setData("text/plain", selectedText);
-      applyStateChange(deleteSelection(state));
+      applyStateChange(deleteSelection(state), "deleteSelection");
     },
   );
 
@@ -573,7 +582,7 @@ export function useInput({
       }
 
       event.preventDefault();
-      applyStateChange(replaceSelection(readCurrentState(), pastedText));
+      applyStateChange(replaceSelection(readCurrentState(), pastedText), "replaceSelection");
     },
   );
 
@@ -837,7 +846,10 @@ function applyKeyboardEvent(
   event: KeyboardEvent,
   keybindings?: EditorKeybinding[],
 ): EditorState | null {
+  const intent = (name: string) => emitLifecycle({ type: "intent", name });
+
   if (event.key === "Delete") {
+    intent("deleteForward");
     return deleteForward(state);
   }
 
@@ -845,6 +857,7 @@ function applyKeyboardEvent(
 
   if (command) {
     if (command === "moveToLineStart" || command === "moveToLineEnd") {
+      intent("moveCaretToLineBoundary");
       return moveCaretToLineBoundary(
         state,
         viewport.layout,
@@ -854,6 +867,7 @@ function applyKeyboardEvent(
     }
 
     if (command === "moveToDocumentStart" || command === "moveToDocumentEnd") {
+      intent("moveCaretToDocumentBoundary");
       return moveCaretToDocumentBoundary(
         state,
         command === "moveToDocumentStart" ? "start" : "end",
@@ -861,6 +875,7 @@ function applyKeyboardEvent(
       );
     }
 
+    intent(command);
     switch (command) {
       case "insertLineBreak":
         return insertLineBreak(state);
@@ -894,10 +909,12 @@ function applyKeyboardEvent(
   }
 
   if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    intent("moveCaretHorizontally");
     return moveCaretHorizontally(state, event.key === "ArrowLeft" ? -1 : 1, event.shiftKey);
   }
 
   if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+    intent("moveCaretVertically");
     return moveCaretVertically(
       state,
       viewport.layout,
@@ -907,6 +924,7 @@ function applyKeyboardEvent(
   }
 
   if (event.key === "PageUp" || event.key === "PageDown") {
+    intent("moveCaretByViewport");
     return moveCaretByViewport(
       state,
       viewport.layout,
@@ -916,6 +934,7 @@ function applyKeyboardEvent(
   }
 
   if (event.key.length === 1 && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    intent("insertText");
     return insertText(state, event.key);
   }
 

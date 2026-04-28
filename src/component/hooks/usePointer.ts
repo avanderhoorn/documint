@@ -4,13 +4,13 @@ import {
   resolveSelectionHit,
   resolveWordSelection,
   setSelection,
-  toggleTaskItem,
   type EditorCommentState,
   type EditorHoverTarget,
   type EditorSelectionPoint,
   type EditorState,
   type EditorViewportState,
 } from "@/editor";
+import type { InstrumentedCommands } from "../lib/instrument-commands";
 import type { LazyRefHandle } from "./useLazyRef";
 import {
   type MouseEvent,
@@ -29,6 +29,7 @@ type UsePointerOptions = {
   canvasRef: RefObject<HTMLCanvasElement | null>;
 
   // Editor state and lookups the hook reads from.
+  commands: InstrumentedCommands;
   commentState: EditorCommentState;
   editorStateRef: RefObject<EditorState | null>;
   editorViewportState: LazyRefHandle<EditorViewportState>;
@@ -38,7 +39,7 @@ type UsePointerOptions = {
   ) => { x: number; y: number } | null;
 
   // Host callbacks the hook invokes.
-  applyNextState: (nextState: EditorState | null) => void;
+  applyNextState: (nextState: EditorState | null, intent?: string) => void;
   autoScrollDuringDrag: (event: PointerEvent<HTMLElement>) => void;
   focusInput: FocusInput;
   onActivity: () => void;
@@ -96,6 +97,7 @@ export function usePointer({
   applyNextState,
   autoScrollDuringDrag,
   canvasRef,
+  commands,
   commentState,
   editorStateRef,
   editorViewportState,
@@ -292,7 +294,10 @@ export function usePointer({
     dragAnchorRef.current = { offset: hit.offset, regionId: hit.regionId };
     onActivity();
     canvas.setPointerCapture(event.pointerId);
-    applyNextState(setSelection(currentState, { offset: hit.offset, regionId: hit.regionId }));
+    applyNextState(
+      setSelection(currentState, { offset: hit.offset, regionId: hit.regionId }),
+      "setSelection.dragStart",
+    );
     // Pass the tapped caret to `focus` so it positions the hidden textarea
     // synchronously before invoking the native `focus()`. Without this, the
     // textarea's position only updates on the next React render via the
@@ -322,7 +327,7 @@ export function usePointer({
 
     onActivity();
     autoScrollDuringDrag(event);
-    applyNextState(setSelection(currentState, { anchor, focus: nextFocus }));
+    applyNextState(setSelection(currentState, { anchor, focus: nextFocus }), "setSelection.drag");
   });
 
   const handlePointerLeave = useEffectEvent(() => {
@@ -342,12 +347,12 @@ export function usePointer({
 
     if (target?.kind === "task-toggle") {
       const currentState = readCurrentState();
-      const toggled = toggleTaskItem(currentState, target.listItemId);
+      const toggled = commands.toggleTaskItem(currentState, target.listItemId);
       if (toggled) {
         event.preventDefault();
         event.stopPropagation();
         onActivity();
-        applyNextState(toggled);
+        applyNextState(toggled, "toggleTaskItem");
       }
       return;
     }
@@ -382,7 +387,10 @@ export function usePointer({
 
     if (hit) {
       onActivity();
-      applyNextState(setSelection(currentState, { offset: hit.offset, regionId: hit.regionId }));
+      applyNextState(
+        setSelection(currentState, { offset: hit.offset, regionId: hit.regionId }),
+        "setSelection.click",
+      );
       focusInput({ offset: hit.offset, regionId: hit.regionId });
     } else {
       focusInput();
@@ -402,7 +410,7 @@ export function usePointer({
     event.preventDefault();
     event.stopPropagation();
     onActivity();
-    applyNextState(setSelection(currentState, wordSel));
+    applyNextState(setSelection(currentState, wordSel), "setSelection.doubleClick");
     focusInput();
   });
 
